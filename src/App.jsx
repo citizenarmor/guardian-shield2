@@ -411,6 +411,34 @@ export default function App() {
   useEffect(() => { if (view === "portal" && portalUser) reloadProtected(); }, [view]);
 
   const reloadClasses = async () => setClasses(await loadKey("gs:classes", []));
+
+  // Returning from Stripe checkout (?reg=success|cancel)
+  const [stripeReturn, setStripeReturn] = useState(null);
+  useEffect(() => {
+    let q;
+    try { q = new URLSearchParams(window.location.search); } catch (e) { return; }
+    const reg = q.get("reg");
+    if (!reg) return;
+    try { window.history.replaceState({}, "", window.location.pathname); } catch (e) {}
+    if (reg === "cancel") { setStripeReturn({ status: "cancel" }); return; }
+    const sid = q.get("session_id");
+    if (reg !== "success" || !sid) return;
+    setStripeReturn({ status: "checking" });
+    (async () => {
+      for (let i = 0; i < 8; i++) {
+        try {
+          const r = await apiGet(`checkout-status?session_id=${encodeURIComponent(sid)}`);
+          if (r.status === "complete") {
+            setStripeReturn({ status: "complete", ref: r.ref });
+            setClasses(await loadKey("gs:classes", []));
+            return;
+          }
+        } catch (e) { break; }
+        await new Promise((res) => setTimeout(res, 1500));
+      }
+      setStripeReturn({ status: "processing" });
+    })();
+  }, []);
   const updateAdminAccounts = async (next) => { setAdminAccounts(next); await saveKey("gs:adminAccounts", next); };
 
   const redeemCode = async (codeId) => {
@@ -493,6 +521,27 @@ export default function App() {
         <div style={{ padding: 80, textAlign: "center", color: C.muted }}>Loading…</div>
       ) : (
         <>
+          {stripeReturn && (
+            <Modal title={stripeReturn.status === "cancel" ? "Checkout cancelled" : stripeReturn.status === "complete" ? "You're registered!" : "Confirming your payment"} onClose={() => setStripeReturn(null)}>
+              {stripeReturn.status === "checking" && (
+                <p style={{ fontSize: 15, color: C.muted, lineHeight: 1.6 }}>One moment — confirming your payment with Stripe…</p>
+              )}
+              {stripeReturn.status === "complete" && (
+                <div style={{ display: "grid", gap: 10 }}>
+                  <p style={{ fontSize: 15, color: C.text, lineHeight: 1.6, margin: 0 }}>Payment received and your seat is reserved. Your registration reference:</p>
+                  <div style={{ ...mono, fontSize: 20, color: C.bronzeLight, background: C.panel2, border: `1px solid ${C.bronzeDark}`, padding: "10px 14px", textAlign: "center" }}>{stripeReturn.ref}</div>
+                  <p style={{ fontSize: 13, color: C.muted, lineHeight: 1.6, margin: 0 }}>Bring a valid ID to check-in. Range safety briefing and liability waiver are completed on Day 1 before training begins.</p>
+                  <Btn onClick={() => setStripeReturn(null)}>Done</Btn>
+                </div>
+              )}
+              {stripeReturn.status === "processing" && (
+                <p style={{ fontSize: 15, color: C.muted, lineHeight: 1.6 }}>Payment received — your registration is being recorded and will appear shortly. If it doesn't show on the schedule within a few minutes, contact us with your Stripe receipt.</p>
+              )}
+              {stripeReturn.status === "cancel" && (
+                <p style={{ fontSize: 15, color: C.muted, lineHeight: 1.6 }}>No worries — your card was not charged and no seat was reserved. You can register any time from the Class Schedule.</p>
+              )}
+            </Modal>
+          )}
           {view === "home" && <Home go={setView} />}
           {view === "product" && <Product go={setView} media={media} />}
           {view === "about" && <About go={setView} />}
@@ -1349,6 +1398,25 @@ function RegisterModal({ cls, onClose, onComplete, onRemoteComplete, codes = [],
 
   const removeCode = () => { setApplied(null); setCodeMsg(null); setCodeInput(""); };
 
+  const payNow = async () => {
+    setPaying(true); setPayErr(null);
+    try {
+      const r = await apiPost("create-checkout", {
+        classId: cls.id,
+        student: { name: f.name, email: f.email, phone: f.phone, company: f.company },
+        discountCode: applied ? applied.code.toUpperCase() : "",
+        passcode: isInstructorClass ? passcode : "",
+      });
+      if (r.url) { window.location.href = r.url; return; }       // → Stripe hosted checkout
+      if (r.free) { if (onRemoteComplete) await onRemoteComplete({ email: f.email.trim(), ref: r.ref }); return; }
+      if (r.demo) { await pay(); return; }                        // Stripe keys not set yet → simulated
+      setPaying(false);
+    } catch (e) {
+      if (e.local) { await pay(); return; }                       // preview mode → simulated
+      setPayErr(e.message); setPaying(false);
+    }
+  };
+
   const pay = async () => {
     setPaying(true); setPayErr(null);
     await new Promise((r) => setTimeout(r, 900)); // simulated payment (Stripe arrives in Phase 2)
@@ -1419,8 +1487,8 @@ function RegisterModal({ cls, onClose, onComplete, onRemoteComplete, codes = [],
       )}
       {step === 2 && (
         <div style={{ display: "grid", gap: 12 }}>
-          <div style={{ background: C.panel2, border: `1px dashed ${C.line}`, padding: "12px 14px", fontSize: 13, color: C.muted }}>
-            <strong style={{ color: C.bronzeLight }}>Demo checkout.</strong> This prototype simulates payment — no card is charged and no real card details should be entered. The production site connects here to a payment processor such as Stripe.
+          <div style={{ background: C.panel2, border: `1px solid ${C.line}`, padding: "12px 14px", fontSize: 13, color: C.muted }}>
+            <strong style={{ color: C.bronzeLight }}>Secure checkout.</strong> Payment is processed by Stripe on their secure payment page — your card details never touch this site. You'll be returned here once payment completes.
           </div>
           <div>
             <FieldLabel>Discount code (optional)</FieldLabel>
@@ -1450,16 +1518,10 @@ function RegisterModal({ cls, onClose, onComplete, onRemoteComplete, codes = [],
               <span>Total due</span><span style={mono}>${total.toFixed(2)}</span>
             </div>
           </div>
-          <Field label="Name on card" placeholder="Jordan Whitfield" />
-          <div className="gs-row-card">
-            <Field label="Card number" placeholder="4242 4242 4242 4242" mono />
-            <Field label="Exp" placeholder="12/28" mono />
-            <Field label="CVC" placeholder="123" mono />
-          </div>
           {payErr && <div style={{ ...mono, fontSize: 12, color: C.warn }}>{payErr}</div>}
           <div style={{ display: "flex", gap: 10 }}>
             <Btn ghost onClick={() => setStep(1)}>Back</Btn>
-            <Btn onClick={pay} disabled={paying}>{paying ? "Processing…" : `Pay $${total.toFixed(2)} and register`}</Btn>
+            <Btn onClick={payNow} disabled={paying}>{paying ? "Processing…" : `Pay $${total.toFixed(2)} securely`}</Btn>
           </div>
         </div>
       )}

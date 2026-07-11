@@ -13,6 +13,8 @@ import crypto from "node:crypto";
 const INSTRUCTOR_KEY = (process.env.INSTRUCTOR_ENROLL_KEY || "SHIELD").toUpperCase();
 const ADMIN_KEY = (process.env.ADMIN_ENROLL_KEY || "ADMIN").toUpperCase();
 const DEMO_MODE = process.env.DEMO_MODE !== "false";
+const STRIPE_SECRET = process.env.STRIPE_SECRET_KEY || "";
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || "";
 const SESSION_HOURS = 12;
 
 const store = () => getStore({ name: "guardian-data", consistency: "strong" });
@@ -103,6 +105,111 @@ const SEED_CLASSES = [
   { id: "GS-D4E5F6", type: "standard", date: "2026-08-22", time: "8:00 AM", location: "High Desert Tactical", city: "Boise", state: "ID", seats: 10, price: 495, instructor: "K. Donnelly", enrolled: [], completed: false },
   { id: "GS-G7H8I9", type: "instructor", date: "2026-09-12", time: "7:30 AM", location: "Guardian HQ", city: "Denver", state: "CO", seats: 8, price: 1250, instructor: "Lead Cadre", enrolled: [], completed: false },
 ];
+
+/* ================= Stripe helpers ================= */
+async function stripeReq(path, params) {
+  const body = new URLSearchParams();
+  const add = (k, v) => body.append(k, String(v));
+  const flatten = (obj, prefix = "") => {
+    for (const [k, v] of Object.entries(obj)) {
+      const key = prefix ? `${prefix}[${k}]` : k;
+      if (v !== null && typeof v === "object") flatten(v, key);
+      else add(key, v);
+    }
+  };
+  flatten(params);
+  const r = await fetch(`https://api.stripe.com/v1/${path}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${STRIPE_SECRET}`, "Content-Type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
+  });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error?.message || "Stripe request failed");
+  return j;
+}
+
+function verifyStripeSignature(payload, sigHeader, secret) {
+  try {
+    const parts = Object.fromEntries(sigHeader.split(",").map((kv) => kv.split("=")));
+    const t = Number(parts.t);
+    if (!t || Math.abs(Date.now() / 1000 - t) > 300) return false; // 5-minute tolerance
+    const expected = crypto.createHmac("sha256", secret).update(`${parts.t}.${payload}`).digest("hex");
+    return safeEqual(expected, parts.v1 || "");
+  } catch (e) { return false; }
+}
+
+/* Shared finalizer: records an enrollment + notification (used by demo,
+   free-with-discount, and Stripe webhook paths). */
+async function finalizeRegistration({ classId, student, discountCode, passcode, paidAmount, paymentRef }) {
+  const classes = await readJson("gs:classes", []);
+  const cls = classes.find((c) => c.id === classId);
+  if (!cls) return { error: "Class not found." };
+
+  if (cls.type === "instructor" && passcode) {
+    const apps = await readJson("gs:apps", []);
+    const t = String(passcode).trim().toUpperCase();
+    const match = apps.find((a) => a.passcode && a.passcode.toUpperCase() === t);
+    if (match) { match.passcodeUsed = true; match.passcodeUsedAt = new Date().toISOString(); await writeJson("gs:apps", apps); }
+  }
+  if (discountCode) {
+    const codes = await readJson("gs:codes", []);
+    const k = codes.find((c) => c.code.toUpperCase() === String(discountCode).toUpperCase());
+    if (k) { k.uses = (k.uses || 0) + 1; await writeJson("gs:codes", codes); }
+  }
+
+  const record = {
+    name: student.name.trim(), email: student.email.trim(), phone: (student.phone || "").trim(),
+    company: (student.company || "").trim(),
+    ref: "REG-" + uid(), registeredAt: new Date().toISOString(),
+    discountCode: discountCode || "", paid: paidAmount,
+    ...(paymentRef ? { paymentRef } : {}),
+  };
+  cls.enrolled = [...(cls.enrolled || []), record];
+  await writeJson("gs:classes", classes);
+
+  const notices = await readJson("gs:notices", []);
+  const place = [cls.location, [cls.city, cls.state].filter(Boolean).join(", ")].filter(Boolean).join(" — ");
+  notices.unshift({
+    id: uid(), when: new Date().toLocaleString(), classId: cls.id, read: false,
+    text: `New registration — ${record.name} (${record.email}) enrolled in ${cls.type === "instructor" ? "Instructor Course" : "2-Day Certification"} on ${cls.date} at ${place}. Paid $${paidAmount.toFixed(2)}${discountCode ? ` (code ${discountCode})` : ""}${paymentRef ? " via Stripe" : ""}.`,
+  });
+  await writeJson("gs:notices", notices);
+  return { ok: true, ref: record.ref };
+}
+
+/* Validates a registration request; returns { cls, paid, appliedCode } or { error } */
+async function validateRegistration({ classId, student, discountCode, passcode }) {
+  if (!student?.name?.trim() || !/@/.test(student?.email || "")) return { error: "Name and a valid email are required." };
+  const classes = await readJson("gs:classes", []);
+  const cls = classes.find((c) => c.id === classId);
+  if (!cls || cls.completed || cls.cancelled) return { error: "That class is not open for registration." };
+  if ((cls.enrolled || []).length >= cls.seats) return { error: "That class is full." };
+
+  if (cls.type === "instructor") {
+    const apps = await readJson("gs:apps", []);
+    const t = String(passcode || "").trim().toUpperCase();
+    const match = apps.find((a) => a.passcode && a.passcode.toUpperCase() === t);
+    if (!match || match.status !== "approved") return { error: "A valid instructor approval passcode is required." };
+    if (match.passcodeUsed) return { error: "That passcode has already been used." };
+  }
+
+  let paid = cls.price, appliedCode = "";
+  if (discountCode) {
+    const codes = await readJson("gs:codes", []);
+    const t = String(discountCode).trim().toUpperCase();
+    const k = codes.find((c) => c.code.toUpperCase() === t);
+    const expired = k?.expires && new Date(k.expires + "T23:59:59") < new Date();
+    const usedUp = k?.maxUses && (k.uses || 0) >= Number(k.maxUses);
+    if (k && k.active && !expired && !usedUp) {
+      const discount = k.kind === "percent"
+        ? Math.round(cls.price * Math.min(Number(k.value), 100)) / 100
+        : Math.min(Number(k.value), cls.price);
+      paid = Math.max(0, Math.round((cls.price - discount) * 100) / 100);
+      appliedCode = k.code.toUpperCase();
+    }
+  }
+  return { cls, paid, appliedCode };
+}
 
 /* ================= route handlers ================= */
 async function handleAuth(req, path, body) {
@@ -347,60 +454,91 @@ async function handleStorage(req, key, sess) {
 /* ---- public actions, validated server-side ---- */
 async function handleRegister(body) {
   const { classId, student, discountCode, passcode } = body;
-  if (!student?.name?.trim() || !/@/.test(student?.email || "")) return bad("Name and a valid email are required.");
-  const classes = await readJson("gs:classes", []);
-  const cls = classes.find((c) => c.id === classId);
-  if (!cls || cls.completed || cls.cancelled) return bad("That class is not open for registration.");
-  if ((cls.enrolled || []).length >= cls.seats) return bad("That class is full.");
+  const v = await validateRegistration({ classId, student, discountCode, passcode });
+  if (v.error) return bad(v.error);
+  const done = await finalizeRegistration({
+    classId, student, discountCode: v.appliedCode, passcode,
+    paidAmount: v.paid, paymentRef: "",
+  });
+  if (done.error) return bad(done.error);
+  return json({ ok: true, ref: done.ref, paid: v.paid });
+}
 
-  // Instructor course passcode check
-  if (cls.type === "instructor") {
-    const apps = await readJson("gs:apps", []);
-    const t = String(passcode || "").trim().toUpperCase();
-    const match = apps.find((a) => a.passcode && a.passcode.toUpperCase() === t);
-    if (!match || match.status !== "approved") return bad("A valid instructor approval passcode is required.");
-    if (match.passcodeUsed) return bad("That passcode has already been used.");
-    match.passcodeUsed = true;
-    match.passcodeUsedAt = new Date().toISOString();
-    await writeJson("gs:apps", apps);
+/* ---- Stripe: create a hosted checkout session ---- */
+async function handleCreateCheckout(req, body) {
+  const { classId, student, discountCode, passcode } = body;
+  const v = await validateRegistration({ classId, student, discountCode, passcode });
+  if (v.error) return bad(v.error);
+
+  // Free after discount — no charge needed, register immediately
+  if (v.paid <= 0) {
+    const done = await finalizeRegistration({ classId, student, discountCode: v.appliedCode, passcode, paidAmount: 0, paymentRef: "" });
+    if (done.error) return bad(done.error);
+    return json({ free: true, ref: done.ref });
   }
 
-  // Discount code
-  let paid = cls.price, appliedCode = "";
-  if (discountCode) {
-    const codes = await readJson("gs:codes", []);
-    const t = String(discountCode).trim().toUpperCase();
-    const k = codes.find((c) => c.code.toUpperCase() === t);
-    const expired = k?.expires && new Date(k.expires + "T23:59:59") < new Date();
-    const usedUp = k?.maxUses && (k.uses || 0) >= Number(k.maxUses);
-    if (k && k.active && !expired && !usedUp) {
-      const discount = k.kind === "percent"
-        ? Math.round(cls.price * Math.min(Number(k.value), 100)) / 100
-        : Math.min(Number(k.value), cls.price);
-      paid = Math.max(0, Math.round((cls.price - discount) * 100) / 100);
-      appliedCode = k.code.toUpperCase();
-      k.uses = (k.uses || 0) + 1;
-      await writeJson("gs:codes", codes);
+  // Stripe not configured yet — tell the client to use the demo flow
+  if (!STRIPE_SECRET) return json({ demo: true });
+
+  const origin = new URL(req.url).origin;
+  const label = `${v.cls.type === "instructor" ? "Instructor Certification Course" : "Guardian 2-Day Certification"} — ${v.cls.date}`;
+  const session = await stripeReq("checkout/sessions", {
+    mode: "payment",
+    customer_email: student.email.trim(),
+    "line_items[0][quantity]": 1,
+    "line_items[0][price_data][currency]": "usd",
+    "line_items[0][price_data][unit_amount]": Math.round(v.paid * 100),
+    "line_items[0][price_data][product_data][name]": label,
+    success_url: `${origin}/?reg=success&session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${origin}/?reg=cancel`,
+  });
+  await writeJson(`gs:pendreg:${session.id}`, {
+    classId, student, discountCode: v.appliedCode, passcode: passcode || "",
+    expires: Date.now() + 4 * 3600 * 1000,
+  });
+  return json({ url: session.url });
+}
+
+/* ---- Stripe: webhook records the enrollment after payment ---- */
+async function handleStripeWebhook(req) {
+  const payload = await req.text();
+  if (!STRIPE_WEBHOOK_SECRET) return bad("Webhook secret not configured.", 500);
+  const sig = req.headers.get("stripe-signature") || "";
+  if (!verifyStripeSignature(payload, sig, STRIPE_WEBHOOK_SECRET)) return bad("Invalid signature.", 400);
+  const event = JSON.parse(payload);
+  if (event.type === "checkout.session.completed") {
+    const session = event.data.object;
+    const pending = await readJson(`gs:pendreg:${session.id}`, null);
+    if (pending) {
+      await finalizeRegistration({
+        classId: pending.classId, student: pending.student,
+        discountCode: pending.discountCode, passcode: pending.passcode,
+        paidAmount: (session.amount_total ?? 0) / 100,
+        paymentRef: session.payment_intent || session.id,
+      }).then(async (done) => {
+        if (done && done.ref) await writeJson(`gs:doneref:${session.id}`, { ref: done.ref, at: Date.now() });
+      });
+      await store().delete(`gs:pendreg:${session.id}`);
     }
   }
+  return json({ received: true });
+}
 
-  const record = {
-    name: student.name.trim(), email: student.email.trim(), phone: (student.phone || "").trim(),
-    company: (student.company || "").trim(),
-    ref: "REG-" + uid(), registeredAt: new Date().toISOString(),
-    discountCode: appliedCode, paid,
-  };
-  cls.enrolled = [...(cls.enrolled || []), record];
-  await writeJson("gs:classes", classes);
-
-  const notices = await readJson("gs:notices", []);
-  const place = [cls.location, [cls.city, cls.state].filter(Boolean).join(", ")].filter(Boolean).join(" — ");
-  notices.unshift({
-    id: uid(), when: new Date().toLocaleString(), classId: cls.id, read: false,
-    text: `New registration — ${record.name} (${record.email}) enrolled in ${cls.type === "instructor" ? "Instructor Course" : "2-Day Certification"} on ${cls.date} at ${place}. Paid $${paid.toFixed(2)}${appliedCode ? ` (code ${appliedCode})` : ""}.`,
-  });
-  await writeJson("gs:notices", notices);
-  return json({ ok: true, ref: record.ref, paid });
+/* ---- Stripe: client polls this after returning from checkout ---- */
+async function handleCheckoutStatus(url) {
+  const sid = url.searchParams.get("session_id") || "";
+  if (!sid) return bad("session_id required.");
+  const pending = await readJson(`gs:pendreg:${sid}`, null);
+  if (pending) return json({ status: "processing" });
+  const classes = await readJson("gs:classes", []);
+  for (const c of classes) {
+    const hit = (c.enrolled || []).find((e) => e.paymentRef && (e.paymentRef === sid || sid.length > 0 && e.paymentRef && e.registeredAt && false));
+    if (hit) return json({ status: "complete", ref: hit.ref });
+  }
+  // paymentRef stores the payment_intent; also match by session via stored map fallback
+  const done = await readJson(`gs:doneref:${sid}`, null);
+  if (done) return json({ status: "complete", ref: done.ref });
+  return json({ status: "unknown" });
 }
 
 async function handleCheckCode(url) {
@@ -480,6 +618,10 @@ async function handleVerify(url) {
 export default async (req) => {
   const url = new URL(req.url);
   const path = url.pathname.replace(/^\/api\//, "");
+  if (path === "stripe-webhook" && req.method === "POST") {
+    try { return await handleStripeWebhook(req); } catch (e) { console.error("webhook error", e); return bad("Webhook error.", 500); }
+  }
+
   let body = {};
   if (["POST", "PUT"].includes(req.method) && !path.startsWith("storage")) {
     try { body = await req.json(); } catch (e) { body = {}; }
@@ -494,6 +636,8 @@ export default async (req) => {
       return await handleStorage(req, key, sess);
     }
     if (path === "register" && req.method === "POST") return await handleRegister(body);
+    if (path === "create-checkout" && req.method === "POST") return await handleCreateCheckout(req, body);
+    if (path === "checkout-status") return await handleCheckoutStatus(url);
     if (path === "check-code") return await handleCheckCode(url);
     if (path === "check-passcode") return await handleCheckPasscode(url);
     if (path === "apply" && req.method === "POST") return await handleApply(body);
