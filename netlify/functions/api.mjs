@@ -15,7 +15,7 @@ const ADMIN_KEY = (process.env.ADMIN_ENROLL_KEY || "ADMIN").toUpperCase();
 const DEMO_MODE = process.env.DEMO_MODE !== "false";
 const SESSION_HOURS = 12;
 
-const store = () => getStore("guardian-data");
+const store = () => getStore({ name: "guardian-data", consistency: "strong" });
 const json = (data, status = 200) => Response.json(data, { status });
 const bad = (error, status = 400) => json({ error }, status);
 
@@ -191,6 +191,78 @@ async function handleAuth(req, path, body) {
     return json({ session: token, account: publicAccount(account) });
   }
 
+  /* ---- password reset, step 1: identify the account ---- */
+  if (path === "reset-start") {
+    const { role, email } = body;
+    const accounts = await getAccounts();
+    const account = findAccount(accounts, email);
+    if (!account || account.role !== role) return bad("No account found with that email.", 404);
+    const pendingToken = randomToken();
+    const smsCode = sixDigits();
+    await writeJson(`auth:pending:${pendingToken}`, {
+      type: "reset", email: account.email, smsCode, expires: Date.now() + 10 * 60 * 1000,
+    });
+    return json({
+      pendingToken, twofa: account.twofa,
+      ...(DEMO_MODE ? { demoSms: smsCode, demoTotpSecret: account.totpSecret } : {}),
+    });
+  }
+
+  /* ---- password reset, step 2: prove identity with 2FA, set new password ---- */
+  if (path === "reset-complete") {
+    const { pendingToken, code, method, newPassword } = body;
+    const pending = await readJson(`auth:pending:${pendingToken}`, null);
+    if (!pending || pending.type !== "reset" || pending.expires < Date.now()) return bad("Reset expired — start again.", 410);
+    if ((newPassword || "").length < 8) return bad("New password must be at least 8 characters.");
+    const accounts = await getAccounts();
+    const account = findAccount(accounts, pending.email);
+    if (!account) return bad("Account not found.", 404);
+    const ok = method === "sms"
+      ? safeEqual(String(code).trim(), pending.smsCode)
+      : verifyTotp(account.totpSecret, code);
+    if (!ok) return bad("That code didn't match. Try again.", 401);
+    account.salt = newSalt();
+    account.hash = hashPassword(newPassword, account.salt);
+    await saveAccounts(accounts);
+    await store().delete(`auth:pending:${pendingToken}`);
+    return json({ ok: true });
+  }
+
+  /* ---- admin: list all accounts (never exposes secrets) ---- */
+  if (path === "accounts") {
+    const sess = await getSession(req);
+    if (!sess || sess.role !== "admin") return bad("Admin access required.", 403);
+    const accounts = await getAccounts();
+    return json({ accounts: accounts.map((a) => ({ ...publicAccount(a), twofa: a.twofa, created: a.created })) });
+  }
+
+  /* ---- admin: set a temporary password for any account ---- */
+  if (path === "admin-set-password") {
+    const sess = await getSession(req);
+    if (!sess || sess.role !== "admin") return bad("Admin access required.", 403);
+    const { email, newPassword } = body;
+    if ((newPassword || "").length < 8) return bad("Password must be at least 8 characters.");
+    const accounts = await getAccounts();
+    const account = findAccount(accounts, email);
+    if (!account) return bad("No account found with that email.", 404);
+    account.salt = newSalt();
+    account.hash = hashPassword(newPassword, account.salt);
+    await saveAccounts(accounts);
+    return json({ ok: true });
+  }
+
+  /* ---- admin: delete an account ---- */
+  if (path === "admin-delete-account") {
+    const sess = await getSession(req);
+    if (!sess || sess.role !== "admin") return bad("Admin access required.", 403);
+    const { email } = body;
+    const accounts = await getAccounts();
+    const account = findAccount(accounts, email);
+    if (!account) return bad("No account found with that email.", 404);
+    await saveAccounts(accounts.filter((a) => a !== account));
+    return json({ ok: true });
+  }
+
   /* ---- restore session on page load ---- */
   if (path === "me") {
     const sess = await getSession(req);
@@ -225,24 +297,28 @@ async function handleStorage(req, key, sess) {
   // Everything else requires a session
   if (!sess) return bad("Sign in required.", 401);
 
-  // Role rules: admin manages media; instructors manage the rest
-  const adminOnlyWrite = ["gs:media"];
+  // Role rules:
+  //  - instructors: full app data (classes, certs, apps, notices, codes, requests, resumes)
+  //  - admins: media, plus reporting/user-management data (certs, classes, payments, settings)
   const instructorKeys = /^gs:(classes|certs|apps|notices|codes|requests|resume:.+)$/;
+  const adminReadable = ["gs:media", "gs:certs", "gs:classes", "gs:payments", "gs:settings"];
+  const adminWritable = ["gs:media", "gs:certs", "gs:payments", "gs:settings"];
+
+  const canRead = sess.role === "instructor"
+    ? key === "gs:media" || instructorKeys.test(key)
+    : adminReadable.includes(key);
+  const canWrite = sess.role === "instructor"
+    ? instructorKeys.test(key)
+    : adminWritable.includes(key);
 
   if (method === "GET") {
-    if (key === "gs:media" || instructorKeys.test(key) || key === "gs:classes") {
-      if (instructorKeys.test(key) && sess.role !== "instructor") return bad("Instructor access required.", 403);
-      const v = await store().get(key);
-      return json({ key, value: v });
-    }
-    return bad("Unknown key.", 404);
+    if (!canRead) return bad("Access denied for this key.", 403);
+    const v = await store().get(key);
+    return json({ key, value: v });
   }
 
   if (method === "PUT" || method === "POST") {
-    const isMedia = adminOnlyWrite.includes(key);
-    if (isMedia && sess.role !== "admin") return bad("Admin access required.", 403);
-    if (!isMedia && sess.role !== "instructor") return bad("Instructor access required.", 403);
-    if (!isMedia && !instructorKeys.test(key)) return bad("Unknown key.", 404);
+    if (!canWrite) return bad("Access denied for this key.", 403);
     const bodyText = await req.text();
     if (bodyText.length > 4.5 * 1024 * 1024) return bad("Value too large.", 413);
     await store().set(key, bodyText);

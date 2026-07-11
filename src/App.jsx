@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import * as XLSX from "xlsx";
 
 /* ============================================================
@@ -148,7 +148,33 @@ function pdfActions(dataUrl, filename) {
   };
 }
 
+/* ---------- export helpers (CSV / XLSX / generic print) ---------- */
+function downloadBlobFile(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+function exportRowsCSV(rows, filename) {
+  if (!rows.length) return;
+  const headers = Object.keys(rows[0]);
+  const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const csv = [headers.map(esc).join(","), ...rows.map((r) => headers.map((h) => esc(r[h])).join(","))].join("\n");
+  downloadBlobFile(new Blob([csv], { type: "text/csv;charset=utf-8;" }), filename);
+}
+function exportSheetsXLSX(sheets, filename) {
+  const wb = XLSX.utils.book_new();
+  sheets.forEach(({ name, rows }) => {
+    if (!rows.length) rows = [{ note: "no data" }];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), name.slice(0, 31));
+  });
+  const out = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+  downloadBlobFile(new Blob([out], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), filename);
+}
+
 /* ---------- session + API helpers (server-side auth, Phase 1) ---------- */
+let remoteEverWorked = false;   // once true, we never silently fall back to local-only mode
 let authToken = null;
 try { authToken = window.localStorage ? window.localStorage.getItem("gsSession") : null; } catch (e) {}
 function setAuthToken(t) {
@@ -174,7 +200,7 @@ async function apiCall(method, path, body) {
     // Non-JSON response means there's no backend here (e.g. preview) — use local mode
     remoteStorage = false; const e = new Error("local"); e.local = true; throw e;
   }
-  remoteStorage = true;
+  remoteStorage = true; remoteEverWorked = true;
   if (!r.ok) { const e = new Error(j.error || "Request failed."); e.status = r.status; throw e; }
   return j;
 }
@@ -199,7 +225,7 @@ async function loadKey(key, fallback) {
       try { j = await r.json(); } catch (e) { j = null; }
       if (j === null) { remoteStorage = false; }
       else {
-        remoteStorage = true;
+        remoteStorage = true; remoteEverWorked = true;
         if (r.ok) return j.value != null ? JSON.parse(j.value) : fallback;
         return fallback; // 401/403/404 from the server: no access to this key
       }
@@ -370,18 +396,19 @@ export default function App() {
     })();
   }, []);
 
-  // After an instructor signs in, re-fetch the protected data with the session
-  useEffect(() => {
-    (async () => {
-      if (!portalUser) return;
-      setClasses(await loadKey("gs:classes", []));
-      setCerts(await loadKey("gs:certs", []));
-      setApps(await loadKey("gs:apps", []));
-      setNotices(await loadKey("gs:notices", []));
-      setCodes(await loadKey("gs:codes", []));
-      setRequests(await loadKey("gs:requests", []));
-    })();
-  }, [portalUser]);
+  // Re-fetch all protected data (fresh registrations, applications, notices…)
+  const reloadProtected = async () => {
+    setClasses(await loadKey("gs:classes", []));
+    setCerts(await loadKey("gs:certs", []));
+    setApps(await loadKey("gs:apps", []));
+    setNotices(await loadKey("gs:notices", []));
+    setCodes(await loadKey("gs:codes", []));
+    setRequests(await loadKey("gs:requests", []));
+  };
+
+  // After sign-in, and every time the portal is opened, pull fresh data
+  useEffect(() => { if (portalUser) reloadProtected(); }, [portalUser]);
+  useEffect(() => { if (view === "portal" && portalUser) reloadProtected(); }, [view]);
 
   const reloadClasses = async () => setClasses(await loadKey("gs:classes", []));
   const updateAdminAccounts = async (next) => { setAdminAccounts(next); await saveKey("gs:adminAccounts", next); };
@@ -471,7 +498,7 @@ export default function App() {
           {view === "about" && <About go={setView} />}
           {view === "admin" && (
             <AdminPortal
-              user={adminUser} setUser={setAdminUser}
+              user={adminUser} setUser={setAdminUser} instrAccounts={accounts}
               accounts={adminAccounts} updateAccounts={updateAdminAccounts}
               media={media} updateMedia={updateMedia} go={setView}
             />
@@ -482,7 +509,7 @@ export default function App() {
           {view === "instructor" && <InstructorApply apps={apps} updateApps={updateApps} go={setView} classes={classes} />}
           {view === "portal" && (
             <Portal
-              user={portalUser} setUser={setPortalUser}
+              user={portalUser} setUser={setPortalUser} reloadData={reloadProtected}
               accounts={accounts} updateAccounts={updateAccounts}
               classes={classes} updateClasses={updateClasses}
               certs={certs} updateCerts={updateCerts}
@@ -1176,8 +1203,8 @@ function Schedule({ classes, onRegister, codes, redeemCode, requests, updateRequ
             try {
               await apiPost("request-class", req);
             } catch (e) {
-              if (e.local) await updateRequests([{ ...req, id: uid(), submittedAt: new Date().toISOString(), read: false }, ...requests]);
-              else throw e;
+              if (e.local && !remoteEverWorked) await updateRequests([{ ...req, id: uid(), submittedAt: new Date().toISOString(), read: false }, ...requests]);
+              else if (!e.local) throw e;
             }
             setRequesting(false);
             setRequestSent(true);
@@ -1324,8 +1351,13 @@ function RegisterModal({ cls, onClose, onComplete, onRemoteComplete, codes = [],
       return;
     } catch (e) {
       if (!e.local) { setPayErr(e.message); setPaying(false); return; }
+      if (remoteEverWorked) {
+        setPayErr("Connection problem — your registration was NOT completed. Please check your connection and try again.");
+        setPaying(false);
+        return;
+      }
     }
-    // ---- local fallback (preview mode) ----
+    // ---- local fallback (preview mode only) ----
     if (applied && redeemCode) await redeemCode(applied.id);
     if (isInstructorClass && consumePasscode) await consumePasscode(passcode);
     const student = {
@@ -1517,6 +1549,11 @@ function InstructorApply({ apps, updateApps, go, classes }) {
       return;
     } catch (e) {
       if (!e.local) { setResumeErr(e.message); setSubmitting(false); return; }
+      if (remoteEverWorked) {
+        setResumeErr("Connection problem — your application was NOT submitted. Please try again.");
+        setSubmitting(false);
+        return;
+      }
     }
     const id = uid();
     if (resume) await saveKey(`gs:resume:${id}`, resume.dataUrl);   // stored separately to keep the app list small
@@ -1631,6 +1668,9 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
   const [twofaCode, setTwofaCode] = useState("");
   const [smsMode, setSmsMode] = useState(false);      // using text code instead of authenticator
   const [smsSent, setSmsSent] = useState(null);       // the demo "texted" code
+  // password reset
+  const [rs, setRs] = useState({ email: "", pw: "", pw2: "" });
+  const [resetDone, setResetDone] = useState(false);
 
   const findAccount = (email) => accounts.find((a) => a.email.toLowerCase() === email.trim().toLowerCase());
 
@@ -1735,6 +1775,50 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
     onSignedIn(pending);
   };
 
+  const startReset = async () => {
+    setErr(null); setBusy(true);
+    try {
+      const r = await apiPost("auth/reset-start", { role, email: rs.email });
+      setPending({ remote: true, reset: true, token: r.pendingToken, email: rs.email.trim(), twofa: r.twofa, demoSms: r.demoSms, totpSecret: r.demoTotpSecret });
+      setTwofaCode("");
+      if (r.twofa === "sms") { setSmsSent(r.demoSms || null); setSmsMode(true); } else { setSmsMode(false); setSmsSent(null); }
+      setMode("reset-finish");
+    } catch (e) {
+      if (!e.local) { setErr(e.message); setBusy(false); return; }
+      // ---- local fallback (preview mode) ----
+      const acct = findAccount(rs.email);
+      if (!acct) { setErr("No account found with that email."); setBusy(false); return; }
+      setPending({ ...acct, resetLocal: true });
+      setTwofaCode("");
+      if (acct.twofa === "sms") { const c = sixDigits(); setSmsSent(c); setSmsMode(true); } else { setSmsMode(false); setSmsSent(null); }
+      setMode("reset-finish");
+    }
+    setBusy(false);
+  };
+
+  const completeReset = async () => {
+    setErr(null);
+    if (rs.pw.length < 8) return setErr("New password must be at least 8 characters.");
+    if (rs.pw !== rs.pw2) return setErr("Passwords don't match.");
+    setBusy(true);
+    if (pending.remote) {
+      try {
+        await apiPost("auth/reset-complete", { pendingToken: pending.token, code: twofaCode, method: smsMode ? "sms" : "totp", newPassword: rs.pw });
+        setBusy(false); setResetDone(true); setRs({ email: "", pw: "", pw2: "" }); setMode("signin");
+      } catch (e) { setBusy(false); setErr(e.local ? "Connection lost — try again." : e.message); }
+      return;
+    }
+    // ---- local fallback ----
+    let ok;
+    if (smsMode) ok = twofaCode.trim() === smsSent;
+    else ok = await verifyTotp(pending.totpSecret, twofaCode);
+    if (!ok) { setBusy(false); return setErr("That code didn't match. Try again."); }
+    const salt = uid() + uid();
+    const passHash = await hashPassword(rs.pw, salt);
+    await updateAccounts(accounts.map((a) => (a.id === pending.id ? { ...a, salt, passHash } : a)));
+    setBusy(false); setResetDone(true); setRs({ email: "", pw: "", pw2: "" }); setMode("signin");
+  };
+
   const sendSms = () => { const c = (pending && pending.demoSms) || sixDigits(); setSmsSent(c); setSmsMode(true); setTwofaCode(""); setErr(null); };
   const useAuthApp = () => { setSmsMode(false); setSmsSent(null); setTwofaCode(""); setErr(null); };
 
@@ -1751,7 +1835,7 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
   return (
     <div style={{ maxWidth: 460, margin: "0 auto", padding: "64px 20px 0" }}>
       <SectionTitle eyebrow={`${roleName} portal`}>
-        {mode === "signup" ? `Create ${roleName.toLowerCase()} account` : mode === "totp-setup" ? "Set up two-factor" : mode === "challenge" ? "Two-factor verification" : `${roleName} sign-in`}
+        {mode === "signup" ? `Create ${roleName.toLowerCase()} account` : mode === "totp-setup" ? "Set up two-factor" : mode === "challenge" ? "Two-factor verification" : mode === "reset-start" ? "Reset password" : mode === "reset-finish" ? "Set a new password" : `${roleName} sign-in`}
       </SectionTitle>
       <div style={{ background: C.panel, border: `1px solid ${C.line}`, padding: "22px 22px 26px", display: "grid", gap: 12 }}>
         <div style={{ display: "flex", justifyContent: "center", marginBottom: 4 }}>
@@ -1760,10 +1844,18 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
 
         {mode === "signin" && (
           <>
+            {resetDone && (
+              <div style={{ ...mono, fontSize: 12, color: C.ok, background: "#1C2A21", border: `1px solid ${C.ok}`, padding: "10px 12px" }}>
+                Password updated — sign in with your new password.
+              </div>
+            )}
             <Field label="Email" type="email" value={si.email} onChange={(e) => setSi({ ...si, email: e.target.value })} placeholder="you@example.com" />
             <Field label="Password" type="password" value={si.password} onChange={(e) => setSi({ ...si, password: e.target.value })} />
             {err && <div style={{ ...mono, fontSize: 12, color: C.warn }}>{err}</div>}
             <Btn onClick={startSignIn} disabled={!si.email || !si.password}>Continue</Btn>
+            <button onClick={() => { setMode("reset-start"); setErr(null); setResetDone(false); setRs({ email: si.email, pw: "", pw2: "" }); }} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 13, padding: 0, textAlign: "left" }}>
+              Forgot password?
+            </button>
             <button onClick={() => { setMode("signup"); setErr(null); }} style={{ background: "none", border: "none", color: C.bronze, cursor: "pointer", fontSize: 14, padding: 0 }}>
               New {roleName.toLowerCase()}? Create an account →
             </button>
@@ -1841,6 +1933,44 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
           </>
         )}
 
+        {mode === "reset-start" && (
+          <>
+            <p style={{ fontSize: 14, color: C.muted, margin: 0, lineHeight: 1.6 }}>
+              Enter your account email. You'll confirm it's you with your two-factor code, then choose a new password.
+            </p>
+            <Field label="Email" type="email" value={rs.email} onChange={(e) => setRs({ ...rs, email: e.target.value })} placeholder="you@example.com" />
+            {err && <div style={{ ...mono, fontSize: 12, color: C.warn }}>{err}</div>}
+            <Btn onClick={startReset} disabled={busy || !/@/.test(rs.email)}>{busy ? "Checking…" : "Continue"}</Btn>
+            <button onClick={() => { setMode("signin"); setErr(null); }} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 13, padding: 0 }}>
+              ← Back to sign-in
+            </button>
+          </>
+        )}
+
+        {mode === "reset-finish" && (
+          <>
+            {smsMode ? <SmsDemoBox /> : (
+              <>
+                <p style={{ fontSize: 14, color: C.muted, margin: 0 }}>Enter the 6-digit code from your authenticator app for <strong style={{ color: C.text }}>{pending.email}</strong>.</p>
+                {pending.totpSecret && <DemoTotpHelper secret={pending.totpSecret} />}
+              </>
+            )}
+            <Field label="6-digit code" value={twofaCode} onChange={(e) => setTwofaCode(e.target.value)} mono placeholder="000000" />
+            <div className="gs-row-2">
+              <Field label="New password (8+ chars)" type="password" value={rs.pw} onChange={(e) => setRs({ ...rs, pw: e.target.value })} />
+              <Field label="Confirm new password" type="password" value={rs.pw2} onChange={(e) => setRs({ ...rs, pw2: e.target.value })} />
+            </div>
+            {err && <div style={{ ...mono, fontSize: 12, color: C.warn }}>{err}</div>}
+            <Btn onClick={completeReset} disabled={busy || twofaCode.trim().length !== 6 || !rs.pw}>{busy ? "Updating…" : "Set new password"}</Btn>
+            <button onClick={smsMode ? useAuthApp : sendSms} style={{ background: "none", border: "none", color: C.bronze, cursor: "pointer", fontSize: 14, padding: 0 }}>
+              {smsMode ? "Use my authenticator app instead" : "Text a code to my phone instead"}
+            </button>
+            <button onClick={() => { setMode("signin"); setPending(null); setErr(null); }} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 13, padding: 0 }}>
+              ← Cancel
+            </button>
+          </>
+        )}
+
         <div style={{ ...mono, fontSize: 11, color: C.muted, lineHeight: 1.6, borderTop: `1px solid ${C.line}`, paddingTop: 10 }}>
           Demo authentication: passwords are salted &amp; hashed in local storage and authenticator codes are real TOTP, but production should use a managed auth service (Auth0, Clerk, Supabase Auth…) with server-side accounts and real SMS delivery.
         </div>
@@ -1849,7 +1979,7 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
   );
 }
 
-function Portal({ user, setUser, accounts, updateAccounts, classes, updateClasses, certs, updateCerts, notices, updateNotices, apps, updateApps, codes, updateCodes, requests, updateRequests }) {
+function Portal({ user, setUser, reloadData, accounts, updateAccounts, classes, updateClasses, certs, updateCerts, notices, updateNotices, apps, updateApps, codes, updateCodes, requests, updateRequests }) {
   const [tab, setTab] = useState("classes");
 
   if (!user) {
@@ -1876,11 +2006,14 @@ function Portal({ user, setUser, accounts, updateAccounts, classes, updateClasse
     <div style={{ maxWidth: 1140, margin: "0 auto", padding: "40px 20px 0" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
         <SectionTitle eyebrow={`Instructor portal${user.company ? " · " + user.company : ""}`}>Welcome back, {firstName}</SectionTitle>
-        <button onClick={async () => { try { await apiPost("auth/logout", {}); } catch (e) {} setAuthToken(null); setUser(null); }} style={{ marginLeft: "auto", background: "none", border: `1px solid ${C.line}`, padding: "6px 14px", cursor: "pointer", fontSize: 13, color: C.muted }}>Sign out</button>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+          <button onClick={() => reloadData && reloadData()} style={{ background: "none", border: `1px solid ${C.bronzeDark}`, padding: "6px 14px", cursor: "pointer", fontSize: 13, color: C.bronze }}>↻ Refresh</button>
+          <button onClick={async () => { try { await apiPost("auth/logout", {}); } catch (e) {} setAuthToken(null); setUser(null); }} style={{ background: "none", border: `1px solid ${C.line}`, padding: "6px 14px", cursor: "pointer", fontSize: 13, color: C.muted }}>Sign out</button>
+        </div>
       </div>
       <div style={{ display: "flex", gap: 4, borderBottom: `2px solid ${C.line}`, marginTop: 8, flexWrap: "wrap" }}>
         {tabs.map(([id, label]) => (
-          <button key={id} onClick={() => setTab(id)}
+          <button key={id} onClick={() => { setTab(id); if (reloadData) reloadData(); }}
             style={{ ...display, fontWeight: 600, fontSize: 15, textTransform: "uppercase", letterSpacing: "0.04em",
               background: "none", border: "none", cursor: "pointer", padding: "10px 14px",
               color: tab === id ? C.bronzeLight : C.muted, borderBottom: tab === id ? `3px solid ${C.bronze}` : "3px solid transparent", marginBottom: -2 }}>
@@ -2878,8 +3011,25 @@ function RosterPrintModal({ cls, onClose }) {
 /* ============================================================
    ADMIN PORTAL — manage The Product page media
    ============================================================ */
-function AdminPortal({ user, setUser, accounts, updateAccounts, media, updateMedia, go }) {
+function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = [], media, updateMedia, go }) {
   const [tab, setTab] = useState("photos");
+  const [d, setD] = useState({ classes: [], certs: [], accounts: [], payments: [], settings: { commissionRate: 20 } });
+
+  const loadAll = async () => {
+    const classes = await loadKey("gs:classes", []);
+    const certs = await loadKey("gs:certs", []);
+    const payments = await loadKey("gs:payments", []);
+    const settings = await loadKey("gs:settings", { commissionRate: 20 });
+    let accs = [];
+    try { const r = await apiGet("auth/accounts"); accs = r.accounts; }
+    catch (e) { accs = (instrAccounts || []).map((a) => ({ role: "instructor", name: a.name, company: a.company || "", email: a.email, phone: a.phone || "", twofa: a.twofa, created: a.created })); }
+    setD({ classes, certs, payments, settings, accounts: accs });
+  };
+  useEffect(() => { if (user) loadAll(); }, [user]);
+
+  const saveCerts = async (next) => { setD((p) => ({ ...p, certs: next })); await saveKey("gs:certs", next); };
+  const savePayments = async (next) => { setD((p) => ({ ...p, payments: next })); await saveKey("gs:payments", next); };
+  const saveSettings = async (next) => { setD((p) => ({ ...p, settings: next })); await saveKey("gs:settings", next); };
 
   if (!user) {
     return <AuthGate accounts={accounts} updateAccounts={updateAccounts} onSignedIn={setUser}
@@ -2887,13 +3037,20 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, media, updateMed
   }
 
   const firstName = (user.name || "").trim().split(/\s+/)[0] || "admin";
-  const tabs = [["photos", `Photos (${media.photos.length})`], ["videos", `Videos (${media.videos.length})`]];
+  const tabs = [
+    ["photos", `Photos (${media.photos.length})`],
+    ["videos", `Videos (${media.videos.length})`],
+    ["users", `Users (${d.certs.length})`],
+    ["report", "Class report"],
+    ["commissions", "Commissions"],
+  ];
 
   return (
     <div style={{ maxWidth: 1140, margin: "0 auto", padding: "40px 20px 0" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
         <SectionTitle eyebrow={`Admin portal${user.company ? " · " + user.company : ""}`}>Welcome back, {firstName}</SectionTitle>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button onClick={loadAll} style={{ background: "none", border: `1px solid ${C.bronzeDark}`, padding: "6px 14px", cursor: "pointer", fontSize: 13, color: C.bronze }}>↻ Refresh</button>
           <button onClick={() => go("product")} style={{ background: "none", border: `1px solid ${C.bronzeDark}`, padding: "6px 14px", cursor: "pointer", fontSize: 13, color: C.bronze }}>View The Product page</button>
           <button onClick={async () => { try { await apiPost("auth/logout", {}); } catch (e) {} setAuthToken(null); setUser(null); }} style={{ background: "none", border: `1px solid ${C.line}`, padding: "6px 14px", cursor: "pointer", fontSize: 13, color: C.muted }}>Sign out</button>
         </div>
@@ -2911,6 +3068,9 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, media, updateMed
       <div style={{ marginTop: 24 }}>
         {tab === "photos" && <AdminPhotos media={media} updateMedia={updateMedia} />}
         {tab === "videos" && <AdminVideos media={media} updateMedia={updateMedia} />}
+        {tab === "users" && <AdminUsers certs={d.certs} saveCerts={saveCerts} accounts={d.accounts} refresh={loadAll} />}
+        {tab === "report" && <AdminClassReport classes={d.classes} accounts={d.accounts} />}
+        {tab === "commissions" && <AdminCommissions classes={d.classes} accounts={d.accounts} payments={d.payments} savePayments={savePayments} settings={d.settings} saveSettings={saveSettings} adminName={user.name} />}
       </div>
     </div>
   );
@@ -3083,6 +3243,487 @@ function AdminVideos({ media, updateMedia }) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+
+/* ============================================================
+   ADMIN — user lists, class report, commissions
+   ============================================================ */
+const money = (n) => "$" + Number(n || 0).toFixed(2);
+
+function AdminPrintModal({ title, subtitle, columns, rows, footerNote, onClose }) {
+  const ink = "#2B2415", bronze = "#8F6F2E";
+  const today = new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(6,5,3,.8)", zIndex: 70, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: 16, overflowY: "auto" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 1000 }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginBottom: 12 }}>
+          <Btn small ghost onClick={onClose}>Close</Btn>
+          <Btn small onClick={() => window.print()}>Print / Save as PDF</Btn>
+        </div>
+        <div className="print-sheet" style={{ background: "#FFFFFF", color: ink, padding: "34px 40px", boxSizing: "border-box", boxShadow: "0 16px 50px rgba(0,0,0,.6)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 16, borderBottom: `3px solid ${bronze}`, paddingBottom: 12 }}>
+            <img src={LOGO} alt="Guardian seal" style={{ width: 54, height: 54, borderRadius: "50%" }} />
+            <div>
+              <div style={{ ...display, fontWeight: 800, fontSize: 24, textTransform: "uppercase", letterSpacing: "0.04em" }}>{title}</div>
+              <div style={{ ...mono, fontSize: 11, letterSpacing: "0.16em", color: bronze }}>GUARDIAN SHIELD TRAINING · {subtitle || `GENERATED ${today.toUpperCase()}`}</div>
+            </div>
+            <div style={{ ...mono, fontSize: 12, marginLeft: "auto", color: "#6B6046" }}>{rows.length} record{rows.length === 1 ? "" : "s"}</div>
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, marginTop: 14 }}>
+            <thead>
+              <tr style={{ textAlign: "left" }}>
+                {columns.map(([k, label]) => (
+                  <th key={k} style={{ ...mono, fontSize: 9, letterSpacing: "0.08em", color: bronze, padding: "5px 6px", borderBottom: `2px solid ${bronze}` }}>{label}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={i}>
+                  {columns.map(([k]) => (
+                    <td key={k} style={{ padding: "5px 6px", borderBottom: "1px solid #E3DCC8" }}>{String(r[k] ?? "")}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {footerNote && <div style={{ ...serif, fontSize: 12, marginTop: 14, color: "#3A3222" }}>{footerNote}</div>}
+          <div style={{ ...serif, fontStyle: "italic", fontSize: 12, color: bronze, marginTop: 10 }}>Protect what matters most.</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Users tab: two managed lists ---------- */
+function AdminUsers({ certs, saveCerts, accounts, refresh }) {
+  return (
+    <div style={{ display: "grid", gap: 36 }}>
+      <UserList title="Certified Instructors" all={certs} saveCerts={saveCerts} accounts={accounts} type="instructor" />
+      <UserList title="Certified Students" all={certs} saveCerts={saveCerts} accounts={accounts} type="standard" />
+    </div>
+  );
+}
+
+function UserList({ title, all, saveCerts, accounts, type }) {
+  const isInstr = type === "instructor";
+  const accountFor = (email) => accounts.find((a) => a.email.toLowerCase() === (email || "").toLowerCase());
+  const rows = all.filter((c) => (isInstr ? c.type === "instructor" : c.type !== "instructor")).map((c) => {
+    const acct = accountFor(c.email);
+    return { ...c, status: new Date(c.expires) < new Date() ? "Expired" : "Valid",
+      company: acct ? acct.company || "" : "", hasAccount: acct ? "Yes" : "No" };
+  });
+
+  const [sort, setSort] = useState({ key: "issued", dir: "desc" });
+  const [editingId, setEditingId] = useState(null);
+  const [ef, setEf] = useState({});
+  const [confirmDel, setConfirmDel] = useState(null);
+  const [printOpen, setPrintOpen] = useState(false);
+  const [acctMsg, setAcctMsg] = useState(null);
+
+  const sorted = [...rows].sort((a, b) => {
+    const va = String(a[sort.key] ?? "").toLowerCase(), vb = String(b[sort.key] ?? "").toLowerCase();
+    const cmp = va < vb ? -1 : va > vb ? 1 : 0;
+    return sort.dir === "asc" ? cmp : -cmp;
+  });
+  const toggleSort = (key) => setSort((s) => (s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" }));
+  const arrow = (key) => (sort.key === key ? (sort.dir === "asc" ? " ▲" : " ▼") : "");
+
+  const COLS = [
+    ["certId", "CERT ID"], ["name", "NAME"], ["email", "EMAIL"], ["phone", "PHONE"],
+    ...(isInstr ? [["company", "COMPANY"], ["hasAccount", "ACCOUNT"]] : []),
+    ["classId", "CLASS"], ["issued", "CERTIFIED"], ["expires", "EXPIRES"], ["status", "STATUS"],
+  ];
+
+  const exportRows = () => sorted.map((r) => {
+    const base = { "Cert ID": r.certId, "Name": r.name, "Email": r.email, "Phone": r.phone || "" };
+    if (isInstr) { base["Company"] = r.company; base["Has Portal Account"] = r.hasAccount; }
+    return { ...base, "Class": r.classId, "Date Certified": r.issued, "Expiration": r.expires, "Status": r.status };
+  });
+
+  const startEdit = (c) => { setEditingId(c.certId); setEf({ name: c.name, email: c.email, phone: c.phone || "", issued: c.issued, expires: c.expires }); };
+  const saveEdit = async () => {
+    if (!ef.name.trim() || !/@/.test(ef.email)) return;
+    await saveCerts(all.map((c) => (c.certId === editingId ? { ...c, name: ef.name.trim(), email: ef.email.trim(), phone: ef.phone.trim(), issued: ef.issued, expires: ef.expires } : c)));
+    setEditingId(null);
+  };
+  const remove = async (certId) => { await saveCerts(all.filter((c) => c.certId !== certId)); setConfirmDel(null); };
+
+  const resetPassword = async (c) => {
+    const temp = "GS-" + uid() + uid().slice(0, 4);
+    try {
+      await apiPost("auth/admin-set-password", { email: c.email, newPassword: temp });
+      setAcctMsg({ id: c.certId, ok: true, text: `Temporary password for ${c.email}: ${temp} — share it securely. They sign in with it plus their existing 2FA, then should change it via "Forgot password".` });
+    } catch (e) { setAcctMsg({ id: c.certId, ok: false, text: e.local ? "Account management isn't available in preview mode." : e.message }); }
+  };
+  const deleteAccount = async (c) => {
+    try {
+      await apiPost("auth/admin-delete-account", { email: c.email });
+      setAcctMsg({ id: c.certId, ok: true, text: `Portal account for ${c.email} deleted. Their certification record remains.` });
+    } catch (e) { setAcctMsg({ id: c.certId, ok: false, text: e.local ? "Account management isn't available in preview mode." : e.message }); }
+  };
+
+  const smallBtn = { ...mono, fontSize: 11, background: "none", border: `1px solid ${C.bronzeDark}`, color: C.bronze, padding: "4px 8px", cursor: "pointer", borderRadius: 2, whiteSpace: "nowrap" };
+  const inputStyle = { width: "100%", padding: "8px 10px", border: `1px solid ${C.line}`, fontSize: 13, ...body, background: C.panel2, color: C.text, boxSizing: "border-box" };
+
+  return (
+    <div>
+      {printOpen && <AdminPrintModal title={title} columns={COLS.map(([k, l]) => [k, l])} rows={sorted} onClose={() => setPrintOpen(false)} />}
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+        <div style={{ ...display, fontWeight: 700, fontSize: 22, textTransform: "uppercase", color: C.bronzeLight }}>{title}</div>
+        <span style={{ ...mono, fontSize: 12, color: C.muted }}>{rows.length} · click headers to sort</span>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <Btn small ghost onClick={() => exportRowsCSV(exportRows(), `${title.toLowerCase().replace(/\s+/g, "-")}.csv`)}>Export .csv</Btn>
+          <Btn small ghost onClick={() => exportSheetsXLSX([{ name: title, rows: exportRows() }], `${title.toLowerCase().replace(/\s+/g, "-")}.xlsx`)}>Export .xlsx</Btn>
+          <Btn small onClick={() => setPrintOpen(true)}>Print / PDF</Btn>
+        </div>
+      </div>
+      {rows.length === 0 ? (
+        <p style={{ color: C.muted }}>No {isInstr ? "certified instructors" : "certified students"} yet.</p>
+      ) : (
+        <div className="gs-table-wrap">
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, background: C.panel, border: `1px solid ${C.line}`, minWidth: 900 }}>
+            <thead>
+              <tr style={{ textAlign: "left", background: C.panel2 }}>
+                {COLS.map(([k, label]) => (
+                  <th key={k} onClick={() => toggleSort(k)}
+                    style={{ ...mono, fontSize: 11, color: sort.key === k ? C.bronzeLight : C.muted, padding: "9px 10px", borderBottom: `1px solid ${C.line}`, cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}>
+                    {label}{arrow(k)}
+                  </th>
+                ))}
+                <th style={{ borderBottom: `1px solid ${C.line}` }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((c) => (
+                <React.Fragment key={c.certId}>
+                  <tr>
+                    <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12, color: C.bronzeLight }}>{c.certId}</td>
+                    <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}` }}>{c.name}</td>
+                    <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}` }}>{c.email}</td>
+                    <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}` }}>{c.phone || "—"}</td>
+                    {isInstr && <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}` }}>{c.company || "—"}</td>}
+                    {isInstr && <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}` }}>{c.hasAccount}</td>}
+                    <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12 }}>{c.classId}</td>
+                    <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12 }}>{c.issued}</td>
+                    <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12 }}>{c.expires}</td>
+                    <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}`, fontWeight: 600, color: c.status === "Expired" ? C.warn : C.ok }}>{c.status}</td>
+                    <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}` }}>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        <button onClick={() => startEdit(c)} style={smallBtn}>Edit</button>
+                        {isInstr && c.hasAccount === "Yes" && (
+                          <>
+                            <button onClick={() => resetPassword(c)} style={smallBtn}>Reset password</button>
+                            <button onClick={() => deleteAccount(c)} style={{ ...smallBtn, color: C.warn, border: `1px solid ${C.line}` }}>Delete account</button>
+                          </>
+                        )}
+                        {confirmDel === c.certId ? (
+                          <>
+                            <button onClick={() => remove(c.certId)} style={{ ...smallBtn, background: C.warn, color: "#14120D", border: `1px solid ${C.warn}` }}>Confirm delete</button>
+                            <button onClick={() => setConfirmDel(null)} style={{ ...smallBtn, color: C.muted, border: `1px solid ${C.line}` }}>Keep</button>
+                          </>
+                        ) : (
+                          <button onClick={() => setConfirmDel(c.certId)} style={{ ...smallBtn, color: C.warn, border: `1px solid ${C.line}` }}>Delete</button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                  {acctMsg && acctMsg.id === c.certId && (
+                    <tr><td colSpan={COLS.length + 1} style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}` }}>
+                      <div style={{ ...mono, fontSize: 12, color: acctMsg.ok ? C.ok : C.warn, background: acctMsg.ok ? "#1C2A21" : "#2E1F16", padding: "8px 10px", userSelect: "all" }}>{acctMsg.text}</div>
+                    </td></tr>
+                  )}
+                  {editingId === c.certId && (
+                    <tr><td colSpan={COLS.length + 1} style={{ padding: "10px", borderBottom: `1px solid ${C.panel2}`, background: C.panel2 }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 8 }}>
+                        <div><FieldLabel>Name</FieldLabel><input value={ef.name} onChange={(e) => setEf({ ...ef, name: e.target.value })} style={inputStyle} /></div>
+                        <div><FieldLabel>Email</FieldLabel><input value={ef.email} onChange={(e) => setEf({ ...ef, email: e.target.value })} style={inputStyle} /></div>
+                        <div><FieldLabel>Phone</FieldLabel><input value={ef.phone} onChange={(e) => setEf({ ...ef, phone: e.target.value })} style={inputStyle} /></div>
+                        <div><FieldLabel>Certified</FieldLabel><input type="date" value={ef.issued} onChange={(e) => setEf({ ...ef, issued: e.target.value })} style={{ ...inputStyle, colorScheme: "dark" }} /></div>
+                        <div><FieldLabel>Expires</FieldLabel><input type="date" value={ef.expires} onChange={(e) => setEf({ ...ef, expires: e.target.value })} style={{ ...inputStyle, colorScheme: "dark" }} /></div>
+                      </div>
+                      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                        <Btn small onClick={saveEdit}>Save changes</Btn>
+                        <Btn small ghost onClick={() => setEditingId(null)}>Cancel</Btn>
+                      </div>
+                    </td></tr>
+                  )}
+                </React.Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------- Class report tab ---------- */
+function AdminClassReport({ classes, accounts }) {
+  const companyOf = (name) => {
+    const a = accounts.find((x) => (x.name || "").toLowerCase() === (name || "").toLowerCase());
+    return a ? a.company || "" : "";
+  };
+  const base = classes.filter((c) => !c.cancelled && !c.completed).map((c) => ({
+    ...c,
+    company: companyOf(c.instructor) || "—",
+    students: c.enrolled || [],
+    revenue: (c.enrolled || []).reduce((s, e) => s + (typeof e.paid === "number" ? e.paid : c.price), 0),
+  }));
+
+  const [f, setF] = useState({ state: "all", city: "all", company: "all", instructor: "all" });
+  const [groupBy, setGroupBy] = useState("none");
+  const [printOpen, setPrintOpen] = useState(false);
+  const opts = (k) => [...new Set(base.map((r) => r[k]).filter(Boolean))].sort();
+
+  const filtered = base.filter((r) =>
+    (f.state === "all" || r.state === f.state) &&
+    (f.city === "all" || r.city === f.city) &&
+    (f.company === "all" || r.company === f.company) &&
+    (f.instructor === "all" || r.instructor === f.instructor)
+  ).sort((a, b) => a.date.localeCompare(b.date));
+
+  const groups = groupBy === "none"
+    ? [{ label: null, rows: filtered }]
+    : [...new Set(filtered.map((r) => r[groupBy] || "—"))].sort().map((g) => ({ label: g, rows: filtered.filter((r) => (r[groupBy] || "—") === g) }));
+
+  const grandRevenue = filtered.reduce((s, r) => s + r.revenue, 0);
+  const grandStudents = filtered.reduce((s, r) => s + r.students.length, 0);
+
+  const selStyle = { padding: "9px 12px", border: `1px solid ${C.line}`, fontSize: 14, ...body, background: C.panel2, color: C.text, minWidth: 140 };
+  const FILTERS = [["state", "State"], ["city", "City"], ["company", "Company"], ["instructor", "Instructor"]];
+
+  const studentRows = () => filtered.flatMap((r) => r.students.map((s) => ({
+    "Class ID": r.id, "Date": r.date, "Type": r.type === "instructor" ? "Instructor Course" : "2-Day Certification",
+    "Location": r.location, "City": r.city || "", "State": r.state || "", "Instructor": r.instructor, "Company": r.company,
+    "Student": s.name, "Email": s.email, "Phone": s.phone || "", "Ref": s.ref, "Discount Code": s.discountCode || "", "Paid": (typeof s.paid === "number" ? s.paid : r.price).toFixed(2),
+  })));
+  const classRows = () => filtered.map((r) => ({
+    "Class ID": r.id, "Date": r.date, "Type": r.type === "instructor" ? "Instructor Course" : "2-Day Certification",
+    "Location": r.location, "City": r.city || "", "State": r.state || "", "Instructor": r.instructor, "Company": r.company,
+    "Registered": r.students.length, "Seats": r.seats, "Revenue": r.revenue.toFixed(2),
+  }));
+
+  return (
+    <div>
+      {printOpen && (
+        <AdminPrintModal title="Scheduled Class Report" columns={[["Date","DATE"],["Class ID","CLASS"],["Location","LOCATION"],["City","CITY"],["State","ST"],["Instructor","INSTRUCTOR"],["Company","COMPANY"],["Registered","REG"],["Revenue","REVENUE"]]}
+          rows={classRows().map((r) => ({ ...r, Revenue: "$" + r.Revenue }))}
+          footerNote={`Grand total: ${grandStudents} registered students · ${money(grandRevenue)} revenue across ${filtered.length} scheduled classes.`}
+          onClose={() => setPrintOpen(false)} />
+      )}
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", background: C.panel, border: `1px solid ${C.line}`, padding: "14px 16px", marginBottom: 18 }}>
+        {FILTERS.map(([k, label]) => (
+          <div key={k}>
+            <FieldLabel>{label}</FieldLabel>
+            <select value={f[k]} onChange={(e) => setF({ ...f, [k]: e.target.value })} style={selStyle}>
+              <option value="all">All</option>
+              {opts(k).map((o) => <option key={o} value={o}>{o}</option>)}
+            </select>
+          </div>
+        ))}
+        <div>
+          <FieldLabel>Subtotals by</FieldLabel>
+          <select value={groupBy} onChange={(e) => setGroupBy(e.target.value)} style={selStyle}>
+            <option value="none">None</option>
+            <option value="state">State</option>
+            <option value="city">City</option>
+            <option value="company">Company</option>
+            <option value="instructor">Instructor</option>
+          </select>
+        </div>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <Btn small ghost onClick={() => exportRowsCSV(studentRows(), "class-report-students.csv")}>Export .csv</Btn>
+          <Btn small ghost onClick={() => exportSheetsXLSX([{ name: "Classes", rows: classRows() }, { name: "Students", rows: studentRows() }], "class-report.xlsx")}>Export .xlsx</Btn>
+          <Btn small onClick={() => setPrintOpen(true)}>Print / PDF</Btn>
+        </div>
+      </div>
+
+      {filtered.length === 0 ? <p style={{ color: C.muted }}>No scheduled classes match those filters.</p> : (
+        <div style={{ display: "grid", gap: 20 }}>
+          {groups.map((g) => (
+            <div key={g.label || "all"}>
+              {g.label && <div style={{ ...display, fontWeight: 700, fontSize: 18, textTransform: "uppercase", color: C.bronzeLight, marginBottom: 8 }}>{groupBy}: {g.label}</div>}
+              <div style={{ display: "grid", gap: 10 }}>
+                {g.rows.map((r) => (
+                  <div key={r.id} style={{ background: C.panel, border: `1px solid ${C.line}`, borderLeft: `4px solid ${C.bronze}`, padding: "14px 16px" }}>
+                    <div style={{ display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
+                      <span style={{ ...display, fontWeight: 700, fontSize: 18, color: C.bronzeLight }}>{fmtDate(r.date)}</span>
+                      <span style={{ fontSize: 14 }}>{r.type === "instructor" ? "Instructor Course" : "2-Day Certification"} · {classPlace(r)}</span>
+                      <span style={{ ...mono, fontSize: 12, color: C.muted }}>{r.instructor}{r.company !== "—" ? ` · ${r.company}` : ""}</span>
+                      <span style={{ marginLeft: "auto", ...mono, fontSize: 13 }}>{r.students.length}/{r.seats} registered · <strong style={{ color: C.ok }}>{money(r.revenue)}</strong></span>
+                    </div>
+                    {r.students.length > 0 && (
+                      <div style={{ marginTop: 8, borderTop: `1px solid ${C.panel2}`, paddingTop: 8, display: "grid", gap: 3 }}>
+                        {r.students.map((s) => (
+                          <div key={s.ref} style={{ ...mono, fontSize: 12, color: C.muted, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                            <span style={{ color: C.text }}>{s.name}</span>
+                            <span>{s.email}</span>
+                            {s.phone && <span>{s.phone}</span>}
+                            <span>{s.ref}</span>
+                            {s.discountCode && <span style={{ color: C.bronze }}>code {s.discountCode}</span>}
+                            <span style={{ marginLeft: "auto", color: C.ok }}>{money(typeof s.paid === "number" ? s.paid : r.price)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {g.label && (
+                <div style={{ ...mono, fontSize: 13, textAlign: "right", padding: "8px 16px", color: C.bronzeLight }}>
+                  Subtotal — {g.label}: {g.rows.reduce((s, r) => s + r.students.length, 0)} students · {money(g.rows.reduce((s, r) => s + r.revenue, 0))}
+                </div>
+              )}
+            </div>
+          ))}
+          <div style={{ background: C.panel2, border: `1px solid ${C.bronzeDark}`, padding: "12px 16px", ...mono, fontSize: 14, textAlign: "right", color: C.bronzeLight }}>
+            GRAND TOTAL: {grandStudents} students · {money(grandRevenue)} across {filtered.length} classes
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------- Commissions tab ---------- */
+function AdminCommissions({ classes, accounts, payments, savePayments, settings, saveSettings, adminName }) {
+  const rate = Number(settings.commissionRate ?? 20);
+  const [rateInput, setRateInput] = useState(String(rate));
+  const [pf, setPf] = useState({ payee: "", amount: "", date: new Date().toISOString().slice(0, 10), note: "" });
+  const [printOpen, setPrintOpen] = useState(false);
+  const companyOf = (name) => {
+    const a = accounts.find((x) => (x.name || "").toLowerCase() === (name || "").toLowerCase());
+    return a ? a.company || "" : "";
+  };
+
+  const byInstructor = {};
+  classes.filter((c) => !c.cancelled).forEach((c) => {
+    const rev = (c.enrolled || []).reduce((s, e) => s + (typeof e.paid === "number" ? e.paid : c.price), 0);
+    if (!byInstructor[c.instructor]) byInstructor[c.instructor] = { instructor: c.instructor, company: companyOf(c.instructor) || "—", classes: 0, students: 0, revenue: 0 };
+    byInstructor[c.instructor].classes += 1;
+    byInstructor[c.instructor].students += (c.enrolled || []).length;
+    byInstructor[c.instructor].revenue += rev;
+  });
+  const rows = Object.values(byInstructor).map((r) => {
+    const commission = Math.round(r.revenue * rate) / 100;
+    const paid = payments.filter((p) => p.payee === r.instructor).reduce((s, p) => s + Number(p.amount || 0), 0);
+    return { ...r, commission, paid, balance: Math.round((commission - paid) * 100) / 100 };
+  }).sort((a, b) => b.revenue - a.revenue);
+
+  const totals = rows.reduce((t, r) => ({ revenue: t.revenue + r.revenue, commission: t.commission + r.commission, paid: t.paid + r.paid, balance: t.balance + r.balance }), { revenue: 0, commission: 0, paid: 0, balance: 0 });
+  const companyShare = Math.round(totals.revenue * 100 - totals.commission * 100) / 100;
+
+  const addPayment = async () => {
+    if (!pf.payee || !Number(pf.amount)) return;
+    await savePayments([{ id: uid(), payee: pf.payee, company: companyOf(pf.payee) || "", amount: Number(pf.amount), date: pf.date, note: pf.note.trim(), recordedBy: adminName, recordedAt: new Date().toISOString() }, ...payments]);
+    setPf({ payee: "", amount: "", date: new Date().toISOString().slice(0, 10), note: "" });
+  };
+  const removePayment = async (id) => savePayments(payments.filter((p) => p.id !== id));
+
+  const exportEarnings = () => rows.map((r) => ({ "Instructor": r.instructor, "Company": r.company, "Classes": r.classes, "Students": r.students, "Revenue": r.revenue.toFixed(2), [`Commission (${rate}%)`]: r.commission.toFixed(2), "Payments Made": r.paid.toFixed(2), "Balance Due": r.balance.toFixed(2) }));
+  const exportPayments = () => payments.map((p) => ({ "Date": p.date, "Payee": p.payee, "Company": p.company || "", "Amount": Number(p.amount).toFixed(2), "Note": p.note || "", "Recorded By": p.recordedBy || "" }));
+
+  const selStyle = { padding: "9px 12px", border: `1px solid ${C.line}`, fontSize: 14, ...body, background: C.panel2, color: C.text, minWidth: 160 };
+  const smallBtn = { ...mono, fontSize: 11, background: "none", border: `1px solid ${C.line}`, color: C.warn, padding: "4px 8px", cursor: "pointer", borderRadius: 2 };
+
+  return (
+    <div style={{ display: "grid", gap: 24 }}>
+      {printOpen && (
+        <AdminPrintModal title="Commission Report" subtitle={`COMMISSION RATE ${rate}% OF REVENUE`}
+          columns={[["instructor","INSTRUCTOR"],["company","COMPANY"],["classes","CLASSES"],["students","STUDENTS"],["revenueF","REVENUE"],["commissionF","COMMISSION"],["paidF","PAID"],["balanceF","BALANCE DUE"]]}
+          rows={rows.map((r) => ({ ...r, revenueF: money(r.revenue), commissionF: money(r.commission), paidF: money(r.paid), balanceF: money(r.balance) }))}
+          footerNote={`Totals — revenue ${money(totals.revenue)} · instructor commissions ${money(totals.commission)} · payments made ${money(totals.paid)} · balance outstanding ${money(totals.balance)} · company share ${money(companyShare)}.`}
+          onClose={() => setPrintOpen(false)} />
+      )}
+
+      {/* rate + exports */}
+      <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap", background: C.panel, border: `1px solid ${C.line}`, padding: "14px 16px" }}>
+        <div>
+          <FieldLabel>Instructor commission rate (% of revenue)</FieldLabel>
+          <input type="number" value={rateInput} onChange={(e) => setRateInput(e.target.value)} style={{ ...selStyle, width: 120 }} />
+        </div>
+        <Btn small onClick={() => saveSettings({ ...settings, commissionRate: Math.max(0, Math.min(100, Number(rateInput) || 0)) })}>Save rate</Btn>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <Btn small ghost onClick={() => exportRowsCSV(exportEarnings(), "commission-report.csv")}>Export .csv</Btn>
+          <Btn small ghost onClick={() => exportSheetsXLSX([{ name: "Earnings", rows: exportEarnings() }, { name: "Payments", rows: exportPayments() }], "commission-report.xlsx")}>Export .xlsx</Btn>
+          <Btn small onClick={() => setPrintOpen(true)}>Print / PDF</Btn>
+        </div>
+      </div>
+
+      {/* earnings table */}
+      <div className="gs-table-wrap">
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, background: C.panel, border: `1px solid ${C.line}`, minWidth: 820 }}>
+          <thead>
+            <tr style={{ textAlign: "left", background: C.panel2 }}>
+              {["INSTRUCTOR", "COMPANY", "CLASSES", "STUDENTS", "REVENUE", `COMMISSION (${rate}%)`, "PAID", "BALANCE DUE"].map((h) => (
+                <th key={h} style={{ ...mono, fontSize: 11, color: C.muted, padding: "9px 10px", borderBottom: `1px solid ${C.line}`, whiteSpace: "nowrap" }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.instructor}>
+                <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}`, fontWeight: 600 }}>{r.instructor}</td>
+                <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}` }}>{r.company}</td>
+                <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}` }}>{r.classes}</td>
+                <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}` }}>{r.students}</td>
+                <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12 }}>{money(r.revenue)}</td>
+                <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12, color: C.bronzeLight }}>{money(r.commission)}</td>
+                <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12 }}>{money(r.paid)}</td>
+                <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12, color: r.balance > 0 ? C.warn : C.ok, fontWeight: 600 }}>{money(r.balance)}</td>
+              </tr>
+            ))}
+            <tr style={{ background: C.panel2 }}>
+              <td colSpan={4} style={{ padding: "10px", ...mono, fontSize: 12, color: C.bronzeLight }}>TOTALS · company share after commissions: {money(companyShare)}</td>
+              <td style={{ padding: "10px", ...mono, fontSize: 12, color: C.bronzeLight }}>{money(totals.revenue)}</td>
+              <td style={{ padding: "10px", ...mono, fontSize: 12, color: C.bronzeLight }}>{money(totals.commission)}</td>
+              <td style={{ padding: "10px", ...mono, fontSize: 12, color: C.bronzeLight }}>{money(totals.paid)}</td>
+              <td style={{ padding: "10px", ...mono, fontSize: 12, color: totals.balance > 0 ? C.warn : C.ok }}>{money(totals.balance)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      {/* record a payment */}
+      <div style={{ background: C.panel, border: `1px solid ${C.line}`, padding: "18px 20px", display: "grid", gap: 12, maxWidth: 640 }}>
+        <div style={{ ...display, fontWeight: 700, fontSize: 18, textTransform: "uppercase", color: C.bronzeLight }}>Record a payment</div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+          <div>
+            <FieldLabel>Payee (instructor / company)</FieldLabel>
+            <select value={pf.payee} onChange={(e) => setPf({ ...pf, payee: e.target.value })} style={selStyle}>
+              <option value="">Select…</option>
+              {rows.map((r) => <option key={r.instructor} value={r.instructor}>{r.instructor}{r.company !== "—" ? ` (${r.company})` : ""}</option>)}
+            </select>
+          </div>
+          <div><FieldLabel>Amount ($)</FieldLabel><input type="number" value={pf.amount} onChange={(e) => setPf({ ...pf, amount: e.target.value })} style={{ ...selStyle, width: 120 }} /></div>
+          <div><FieldLabel>Date</FieldLabel><input type="date" value={pf.date} onChange={(e) => setPf({ ...pf, date: e.target.value })} style={{ ...selStyle, colorScheme: "dark" }} /></div>
+          <div style={{ flex: 1, minWidth: 160 }}><FieldLabel>Note (optional)</FieldLabel><input value={pf.note} onChange={(e) => setPf({ ...pf, note: e.target.value })} placeholder="e.g. July payout — check #1042" style={{ ...selStyle, width: "100%", boxSizing: "border-box" }} /></div>
+          <Btn small onClick={addPayment} disabled={!pf.payee || !Number(pf.amount)}>Record payment</Btn>
+        </div>
+      </div>
+
+      {/* payment history */}
+      <div>
+        <div style={{ ...display, fontWeight: 700, fontSize: 18, textTransform: "uppercase", color: C.bronzeLight, marginBottom: 8 }}>Payment history</div>
+        {payments.length === 0 ? <p style={{ color: C.muted }}>No payments recorded yet.</p> : (
+          <div style={{ display: "grid", gap: 8 }}>
+            {payments.map((p) => (
+              <div key={p.id} style={{ background: C.panel, border: `1px solid ${C.line}`, padding: "10px 14px", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", ...mono, fontSize: 12 }}>
+                <span>{fmtDate(p.date)}</span>
+                <span style={{ color: C.text, ...body, fontSize: 14, fontWeight: 600 }}>{p.payee}</span>
+                {p.company && <span style={{ color: C.muted }}>{p.company}</span>}
+                {p.note && <span style={{ color: C.muted }}>{p.note}</span>}
+                <span style={{ marginLeft: "auto", color: C.ok, fontSize: 14 }}>{money(p.amount)}</span>
+                <button onClick={() => removePayment(p.id)} style={smallBtn}>Delete</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
