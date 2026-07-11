@@ -251,6 +251,22 @@ async function handleAuth(req, path, body) {
     return json({ ok: true });
   }
 
+  /* ---- admin: update an account's details ---- */
+  if (path === "admin-update-account") {
+    const sess = await getSession(req);
+    if (!sess || sess.role !== "admin") return bad("Admin access required.", 403);
+    const { email, name, company, phone } = body;
+    if (!name?.trim()) return bad("Name is required.");
+    const accounts = await getAccounts();
+    const account = findAccount(accounts, email);
+    if (!account) return bad("No account found with that email.", 404);
+    account.name = name.trim();
+    account.company = (company || "").trim();
+    account.phone = (phone || "").trim();
+    await saveAccounts(accounts);
+    return json({ ok: true, account: publicAccount(account) });
+  }
+
   /* ---- admin: delete an account ---- */
   if (path === "admin-delete-account") {
     const sess = await getSession(req);

@@ -1267,7 +1267,7 @@ function RequestClassModal({ onClose, onSubmit }) {
         <Field label="Your name" value={f.name} onChange={set("name")} placeholder="Jordan Whitfield" />
         <div className="gs-row-2">
           <Field label="Email" type="email" value={f.email} onChange={set("email")} placeholder="you@example.com" />
-          <Field label="Phone" value={f.phone} onChange={set("phone")} placeholder="(555) 201-4477" />
+          <Field label="Phone" type="tel" value={f.phone} onChange={set("phone")} placeholder="999-999-9999" autoComplete="tel" inputMode="tel" />
         </div>
         <Field label="City & state (class area)" value={f.area} onChange={set("area")} placeholder="e.g. Provo, UT" />
         <div className="gs-row-2">
@@ -1386,9 +1386,16 @@ function RegisterModal({ cls, onClose, onComplete, onRemoteComplete, codes = [],
       </div>
       {step === 1 && (
         <div style={{ display: "grid", gap: 12 }}>
+          {isInstructorClass && (
+            <div style={{ background: "#2A2415", border: `1px solid ${C.bronzeDark}`, borderLeft: `4px solid ${C.bronze}`, padding: "12px 14px", fontSize: 14, color: C.text, lineHeight: 1.6 }}>
+              <strong style={{ color: C.bronzeLight }}>Approval required before registering.</strong> All applicants must first
+              apply to become a Guardian Instructor on the <strong>Become an Instructor</strong> page. Approved applicants
+              receive a one-time registration passcode by email — you'll need it to complete this registration.
+            </div>
+          )}
           <Field label="Full name" value={f.name} onChange={set("name")} placeholder="Jordan Whitfield" />
           <Field label="Email" value={f.email} onChange={set("email")} placeholder="you@example.com" type="email" />
-          <Field label="Phone" value={f.phone} onChange={set("phone")} placeholder="(555) 201-4477" />
+          <Field label="Phone" type="tel" value={f.phone} onChange={set("phone")} placeholder="999-999-9999" autoComplete="tel" inputMode="tel" />
           {isInstructorClass && (
             <Field label="Company (optional)" value={f.company} onChange={set("company")} placeholder="Your company or agency" />
           )}
@@ -1611,7 +1618,7 @@ function InstructorApply({ apps, updateApps, go, classes }) {
               <Field label="Full name" value={f.name} onChange={set("name")} />
               <Field label="Company (optional)" value={f.company} onChange={set("company")} placeholder="Your company or agency" />
               <Field label="Email" value={f.email} onChange={set("email")} type="email" />
-              <Field label="Phone" value={f.phone} onChange={set("phone")} />
+              <Field label="Phone" type="tel" value={f.phone} onChange={set("phone")} placeholder="999-999-9999" autoComplete="tel" inputMode="tel" />
               <div>
                 <FieldLabel>Training / professional background</FieldLabel>
                 <textarea value={f.background} onChange={set("background")} rows={5}
@@ -1880,15 +1887,15 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
 
         {mode === "signup" && (
           <>
-            <Field label="Full name" value={su.name} onChange={(e) => setSu({ ...su, name: e.target.value })} placeholder="Aaron Whitfield" />
-            <Field label="Company name (optional)" value={su.company} onChange={(e) => setSu({ ...su, company: e.target.value })} placeholder="e.g. Wasatch Defense Training LLC" />
+            <Field label="Full name" value={su.name} onChange={(e) => setSu({ ...su, name: e.target.value })} placeholder="Aaron Whitfield" autoComplete="name" />
+            <Field label="Company name (optional)" value={su.company} onChange={(e) => setSu({ ...su, company: e.target.value })} placeholder="e.g. Wasatch Defense Training LLC" autoComplete="organization" />
             <div className="gs-row-2">
-              <Field label="Email" type="email" value={su.email} onChange={(e) => setSu({ ...su, email: e.target.value })} />
-              <Field label="Mobile phone" value={su.phone} onChange={(e) => setSu({ ...su, phone: e.target.value })} placeholder="(555) 201-4477" />
+              <Field label="Email" type="email" value={su.email} onChange={(e) => setSu({ ...su, email: e.target.value })} autoComplete="email" />
+              <Field label="Mobile phone" type="tel" value={su.phone} onChange={(e) => setSu({ ...su, phone: e.target.value })} placeholder="999-999-9999" autoComplete="tel" inputMode="tel" />
             </div>
             <div className="gs-row-2">
-              <Field label="Password (8+ chars)" type="password" value={su.password} onChange={(e) => setSu({ ...su, password: e.target.value })} />
-              <Field label="Confirm password" type="password" value={su.confirm} onChange={(e) => setSu({ ...su, confirm: e.target.value })} />
+              <Field label="Password (8+ chars)" type="password" value={su.password} onChange={(e) => setSu({ ...su, password: e.target.value })} autoComplete="new-password" />
+              <Field label="Confirm password" type="password" value={su.confirm} onChange={(e) => setSu({ ...su, confirm: e.target.value })} autoComplete="new-password" />
             </div>
             <Field label={keyLabel} value={su.key} onChange={(e) => setSu({ ...su, key: e.target.value })} mono placeholder={keyHint} />
             {err && <div style={{ ...mono, fontSize: 12, color: C.warn, lineHeight: 1.5 }}>{err}</div>}
@@ -3048,7 +3055,12 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
     const settings = await loadKey("gs:settings", { commissionRate: 20 });
     let accs = [];
     try { const r = await apiGet("auth/accounts"); accs = r.accounts; }
-    catch (e) { accs = (instrAccounts || []).map((a) => ({ role: "instructor", name: a.name, company: a.company || "", email: a.email, phone: a.phone || "", twofa: a.twofa, created: a.created })); }
+    catch (e) {
+      accs = [
+        ...(instrAccounts || []).map((a) => ({ role: "instructor", name: a.name, company: a.company || "", email: a.email, phone: a.phone || "", twofa: a.twofa, created: a.created })),
+        ...(accounts || []).map((a) => ({ role: "admin", name: a.name, company: a.company || "", email: a.email, phone: a.phone || "", twofa: a.twofa, created: a.created })),
+      ];
+    }
     setD({ classes, certs, payments, settings, accounts: accs });
   };
   useEffect(() => { if (user) loadAll(); }, [user]);
@@ -3068,6 +3080,7 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
     ["photos", `Photos (${media.photos.length})`],
     ["videos", `Videos (${media.videos.length})`],
     ["users", `Users (${d.certs.length})`],
+    ["admins", `Admins (${d.accounts.filter((a) => a.role === "admin").length})`],
     ["report", "Class report"],
     ["commissions", "Commissions"],
   ];
@@ -3096,6 +3109,7 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
         {tab === "photos" && <AdminPhotos media={media} updateMedia={updateMedia} />}
         {tab === "videos" && <AdminVideos media={media} updateMedia={updateMedia} />}
         {tab === "users" && <AdminUsers certs={d.certs} saveCerts={saveCerts} accounts={d.accounts} refresh={loadAll} />}
+        {tab === "admins" && <AdminAdmins accounts={d.accounts} refresh={loadAll} currentEmail={user.email} />}
         {tab === "report" && <AdminClassReport classes={d.classes} accounts={d.accounts} />}
         {tab === "commissions" && <AdminCommissions classes={d.classes} accounts={d.accounts} payments={d.payments} savePayments={savePayments} saveClasses={saveClasses} settings={d.settings} saveSettings={saveSettings} adminName={user.name} />}
       </div>
@@ -3484,6 +3498,132 @@ function UserList({ title, all, saveCerts, accounts, type }) {
           </table>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ---------- Admins tab: manage administrator accounts ---------- */
+function AdminAdmins({ accounts, refresh, currentEmail }) {
+  const admins = accounts.filter((a) => a.role === "admin");
+  const [sort, setSort] = useState({ key: "name", dir: "asc" });
+  const [editingEmail, setEditingEmail] = useState(null);
+  const [ef, setEf] = useState({ name: "", company: "", phone: "" });
+  const [confirmDel, setConfirmDel] = useState(null);
+  const [msg, setMsg] = useState(null);
+
+  const sorted = [...admins].sort((a, b) => {
+    const va = String(a[sort.key] ?? "").toLowerCase(), vb = String(b[sort.key] ?? "").toLowerCase();
+    const cmp = va < vb ? -1 : va > vb ? 1 : 0;
+    return sort.dir === "asc" ? cmp : -cmp;
+  });
+  const toggleSort = (key) => setSort((s) => (s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" }));
+  const arrow = (key) => (sort.key === key ? (sort.dir === "asc" ? " ▲" : " ▼") : "");
+  const COLS = [["name", "NAME"], ["company", "COMPANY"], ["email", "EMAIL"], ["phone", "PHONE"], ["twofa", "2FA"], ["created", "CREATED"]];
+
+  const startEdit = (a) => { setEditingEmail(a.email); setEf({ name: a.name, company: a.company || "", phone: a.phone || "" }); setMsg(null); };
+  const saveEdit = async () => {
+    if (!ef.name.trim()) return;
+    try {
+      await apiPost("auth/admin-update-account", { email: editingEmail, name: ef.name, company: ef.company, phone: ef.phone });
+      setEditingEmail(null);
+      await refresh();
+    } catch (e) { setMsg({ email: editingEmail, ok: false, text: e.local ? "Account management isn't available in preview mode." : e.message }); }
+  };
+  const resetPassword = async (a) => {
+    const temp = "GS-" + uid() + uid().slice(0, 4);
+    try {
+      await apiPost("auth/admin-set-password", { email: a.email, newPassword: temp });
+      setMsg({ email: a.email, ok: true, text: `Temporary password for ${a.email}: ${temp} — share it securely. They sign in with it plus their existing 2FA, then should change it via "Forgot password".` });
+    } catch (e) { setMsg({ email: a.email, ok: false, text: e.local ? "Account management isn't available in preview mode." : e.message }); }
+  };
+  const remove = async (a) => {
+    try {
+      await apiPost("auth/admin-delete-account", { email: a.email });
+      setConfirmDel(null); setMsg(null);
+      await refresh();
+    } catch (e) { setMsg({ email: a.email, ok: false, text: e.local ? "Account management isn't available in preview mode." : e.message }); }
+  };
+
+  const smallBtn = { ...mono, fontSize: 11, background: "none", border: `1px solid ${C.bronzeDark}`, color: C.bronze, padding: "4px 8px", cursor: "pointer", borderRadius: 2, whiteSpace: "nowrap" };
+  const inputStyle = { width: "100%", padding: "8px 10px", border: `1px solid ${C.line}`, fontSize: 13, ...body, background: C.panel2, color: C.text, boxSizing: "border-box" };
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+        <div style={{ ...display, fontWeight: 700, fontSize: 22, textTransform: "uppercase", color: C.bronzeLight }}>Administrator accounts</div>
+        <span style={{ ...mono, fontSize: 12, color: C.muted }}>{admins.length} · click headers to sort</span>
+      </div>
+      {admins.length === 0 ? (
+        <p style={{ color: C.muted }}>No administrator accounts found. (In preview mode this list may be empty.)</p>
+      ) : (
+        <div className="gs-table-wrap">
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, background: C.panel, border: `1px solid ${C.line}`, minWidth: 860 }}>
+            <thead>
+              <tr style={{ textAlign: "left", background: C.panel2 }}>
+                {COLS.map(([k, label]) => (
+                  <th key={k} onClick={() => toggleSort(k)}
+                    style={{ ...mono, fontSize: 11, color: sort.key === k ? C.bronzeLight : C.muted, padding: "9px 10px", borderBottom: `1px solid ${C.line}`, cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}>
+                    {label}{arrow(k)}
+                  </th>
+                ))}
+                <th style={{ borderBottom: `1px solid ${C.line}` }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((a) => (
+                <React.Fragment key={a.email}>
+                  <tr>
+                    <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}`, fontWeight: 600 }}>
+                      {a.name}{a.email === currentEmail && <span style={{ ...mono, fontSize: 10, letterSpacing: "0.1em", background: C.bronze, color: "#1A1509", padding: "2px 7px", borderRadius: 2, marginLeft: 8 }}>YOU</span>}
+                    </td>
+                    <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}` }}>{a.company || "—"}</td>
+                    <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}` }}>{a.email}</td>
+                    <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}` }}>{a.phone || "—"}</td>
+                    <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12 }}>{a.twofa === "sms" ? "Text message" : "Authenticator"}</td>
+                    <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12 }}>{a.created || "—"}</td>
+                    <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}` }}>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        <button onClick={() => startEdit(a)} style={smallBtn}>Edit</button>
+                        <button onClick={() => resetPassword(a)} style={smallBtn}>Reset password</button>
+                        {a.email !== currentEmail && (confirmDel === a.email ? (
+                          <>
+                            <button onClick={() => remove(a)} style={{ ...smallBtn, background: C.warn, color: "#14120D", border: `1px solid ${C.warn}` }}>Confirm remove</button>
+                            <button onClick={() => setConfirmDel(null)} style={{ ...smallBtn, color: C.muted, border: `1px solid ${C.line}` }}>Keep</button>
+                          </>
+                        ) : (
+                          <button onClick={() => setConfirmDel(a.email)} style={{ ...smallBtn, color: C.warn, border: `1px solid ${C.line}` }}>Remove</button>
+                        ))}
+                      </div>
+                    </td>
+                  </tr>
+                  {msg && msg.email === a.email && (
+                    <tr><td colSpan={COLS.length + 1} style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}` }}>
+                      <div style={{ ...mono, fontSize: 12, color: msg.ok ? C.ok : C.warn, background: msg.ok ? "#1C2A21" : "#2E1F16", padding: "8px 10px", userSelect: "all" }}>{msg.text}</div>
+                    </td></tr>
+                  )}
+                  {editingEmail === a.email && (
+                    <tr><td colSpan={COLS.length + 1} style={{ padding: "10px", borderBottom: `1px solid ${C.panel2}`, background: C.panel2 }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 8 }}>
+                        <div><FieldLabel>Name</FieldLabel><input value={ef.name} onChange={(e) => setEf({ ...ef, name: e.target.value })} style={inputStyle} /></div>
+                        <div><FieldLabel>Company</FieldLabel><input value={ef.company} onChange={(e) => setEf({ ...ef, company: e.target.value })} style={inputStyle} /></div>
+                        <div><FieldLabel>Phone</FieldLabel><input type="tel" value={ef.phone} onChange={(e) => setEf({ ...ef, phone: e.target.value })} placeholder="999-999-9999" style={inputStyle} /></div>
+                      </div>
+                      <div style={{ ...mono, fontSize: 11, color: C.muted, marginTop: 8 }}>Email is the account's sign-in identity and can't be changed here.</div>
+                      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                        <Btn small onClick={saveEdit}>Save changes</Btn>
+                        <Btn small ghost onClick={() => setEditingEmail(null)}>Cancel</Btn>
+                      </div>
+                    </td></tr>
+                  )}
+                </React.Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div style={{ ...mono, fontSize: 11, color: C.muted, marginTop: 10, lineHeight: 1.6 }}>
+        You can't remove your own account while signed in. New admins are created from the Admin sign-in page using the admin enrollment key.
+      </div>
     </div>
   );
 }
@@ -4070,11 +4210,11 @@ function FieldLabel({ children }) {
   return <div style={{ ...mono, fontSize: 12, color: C.muted, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 5 }}>{children}</div>;
 }
 
-function Field({ label, value, onChange, placeholder, type = "text", mono: isMono }) {
+function Field({ label, value, onChange, placeholder, type = "text", mono: isMono, ...rest }) {
   return (
     <div>
       <FieldLabel>{label}</FieldLabel>
-      <input type={type} value={value} onChange={onChange} placeholder={placeholder}
+      <input type={type} value={value} onChange={onChange} placeholder={placeholder} {...rest}
         style={{ width: "100%", padding: "10px 12px", border: `1px solid ${C.line}`, fontSize: 14,
           ...(isMono ? mono : body), background: C.panel2, color: C.text, boxSizing: "border-box", colorScheme: "dark" }} />
     </div>
