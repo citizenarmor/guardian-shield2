@@ -182,7 +182,7 @@ const apiGet = (path) => apiCall("GET", path);
 const apiPost = (path, body) => apiCall("POST", path, body);
 
 /* enrolled count that works for both full and sanitized class records */
-const enrolledN = (c) => (c.enrolled ? enrolledN(c) : c.enrolledCount || 0);
+const enrolledN = (c) => (Array.isArray(c.enrolled) && c.enrolled.length ? c.enrolled.length : c.enrolledCount || 0);
 
 /* ---------- storage helpers ----------
    Primary: Netlify Blobs via the /api/storage function (shared across all
