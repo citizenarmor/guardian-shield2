@@ -3028,6 +3028,7 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
   useEffect(() => { if (user) loadAll(); }, [user]);
 
   const saveCerts = async (next) => { setD((p) => ({ ...p, certs: next })); await saveKey("gs:certs", next); };
+  const saveClasses = async (next) => { setD((p) => ({ ...p, classes: next })); await saveKey("gs:classes", next); };
   const savePayments = async (next) => { setD((p) => ({ ...p, payments: next })); await saveKey("gs:payments", next); };
   const saveSettings = async (next) => { setD((p) => ({ ...p, settings: next })); await saveKey("gs:settings", next); };
 
@@ -3070,7 +3071,7 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
         {tab === "videos" && <AdminVideos media={media} updateMedia={updateMedia} />}
         {tab === "users" && <AdminUsers certs={d.certs} saveCerts={saveCerts} accounts={d.accounts} refresh={loadAll} />}
         {tab === "report" && <AdminClassReport classes={d.classes} accounts={d.accounts} />}
-        {tab === "commissions" && <AdminCommissions classes={d.classes} accounts={d.accounts} payments={d.payments} savePayments={savePayments} settings={d.settings} saveSettings={saveSettings} adminName={user.name} />}
+        {tab === "commissions" && <AdminCommissions classes={d.classes} accounts={d.accounts} payments={d.payments} savePayments={savePayments} saveClasses={saveClasses} settings={d.settings} saveSettings={saveSettings} adminName={user.name} />}
       </div>
     </div>
   );
@@ -3590,135 +3591,273 @@ function AdminClassReport({ classes, accounts }) {
 }
 
 /* ---------- Commissions tab ---------- */
-function AdminCommissions({ classes, accounts, payments, savePayments, settings, saveSettings, adminName }) {
-  const rate = Number(settings.commissionRate ?? 20);
-  const [rateInput, setRateInput] = useState(String(rate));
-  const [pf, setPf] = useState({ payee: "", amount: "", date: new Date().toISOString().slice(0, 10), note: "" });
+function AdminCommissions({ classes, accounts, payments, savePayments, saveClasses, settings, saveSettings, adminName }) {
+  const instrRateDefault = Number(settings.commissionRate ?? 20);
+  const companyRateDefault = Number(settings.companyRate ?? 10);
+  const [rateInput, setRateInput] = useState(String(instrRateDefault));
+  const [companyRateInput, setCompanyRateInput] = useState(String(companyRateDefault));
+  const [pf, setPf] = useState({ type: "instructor", payee: "", amount: "", date: new Date().toISOString().slice(0, 10), note: "" });
   const [printOpen, setPrintOpen] = useState(false);
+  const [dailyPrintOpen, setDailyPrintOpen] = useState(false);
+  const [editRate, setEditRate] = useState(null); // { classId, ref, i, c, student }
+
+  const round2 = (n) => Math.round(n * 100) / 100;
   const companyOf = (name) => {
     const a = accounts.find((x) => (x.name || "").toLowerCase() === (name || "").toLowerCase());
     return a ? a.company || "" : "";
   };
 
-  const byInstructor = {};
+  /* ---- per-student commission math ---- */
+  const iMap = {}, cMap = {}, studentRows = [];
   classes.filter((c) => !c.cancelled).forEach((c) => {
-    const rev = (c.enrolled || []).reduce((s, e) => s + (typeof e.paid === "number" ? e.paid : c.price), 0);
-    if (!byInstructor[c.instructor]) byInstructor[c.instructor] = { instructor: c.instructor, company: companyOf(c.instructor) || "—", classes: 0, students: 0, revenue: 0 };
-    byInstructor[c.instructor].classes += 1;
-    byInstructor[c.instructor].students += (c.enrolled || []).length;
-    byInstructor[c.instructor].revenue += rev;
+    const comp = companyOf(c.instructor) || "—";
+    (c.enrolled || []).forEach((s) => {
+      const paid = typeof s.paid === "number" ? s.paid : c.price;
+      const iRate = s.instrRate != null ? Number(s.instrRate) : instrRateDefault;
+      const cRate = s.companyRate != null ? Number(s.companyRate) : companyRateDefault;
+      const iCom = round2((paid * iRate) / 100);
+      const cCom = round2((paid * cRate) / 100);
+      studentRows.push({ classId: c.id, date: c.date, instructor: c.instructor, company: comp, ref: s.ref, student: s.name, paid, iRate, cRate, iCom, cCom, overridden: s.instrRate != null || s.companyRate != null });
+      if (!iMap[c.instructor]) iMap[c.instructor] = { payee: c.instructor, company: comp, students: 0, revenue: 0, commission: 0 };
+      iMap[c.instructor].students += 1; iMap[c.instructor].revenue += paid; iMap[c.instructor].commission += iCom;
+      if (comp !== "—") {
+        if (!cMap[comp]) cMap[comp] = { payee: comp, students: 0, revenue: 0, commission: 0 };
+        cMap[comp].students += 1; cMap[comp].revenue += paid; cMap[comp].commission += cCom;
+      }
+    });
   });
-  const rows = Object.values(byInstructor).map((r) => {
-    const commission = Math.round(r.revenue * rate) / 100;
-    const paid = payments.filter((p) => p.payee === r.instructor).reduce((s, p) => s + Number(p.amount || 0), 0);
-    return { ...r, commission, paid, balance: Math.round((commission - paid) * 100) / 100 };
-  }).sort((a, b) => b.revenue - a.revenue);
+  const paidFor = (type, name) => round2(payments.filter((p) => (p.payeeType || "instructor") === type && p.payee === name).reduce((s, p) => s + Number(p.amount || 0), 0));
+  const finish = (r, type) => { const rev = round2(r.revenue), com = round2(r.commission), paid = paidFor(type, r.payee); return { ...r, revenue: rev, commission: com, paid, balance: round2(com - paid) }; };
+  const iRows = Object.values(iMap).map((r) => finish(r, "instructor")).sort((a, b) => b.revenue - a.revenue);
+  const cRows = Object.values(cMap).map((r) => finish(r, "company")).sort((a, b) => b.revenue - a.revenue);
+  const tot = (rows) => rows.reduce((t, r) => ({ revenue: round2(t.revenue + r.revenue), commission: round2(t.commission + r.commission), paid: round2(t.paid + r.paid), balance: round2(t.balance + r.balance) }), { revenue: 0, commission: 0, paid: 0, balance: 0 });
+  const iTot = tot(iRows), cTot = tot(cRows);
 
-  const totals = rows.reduce((t, r) => ({ revenue: t.revenue + r.revenue, commission: t.commission + r.commission, paid: t.paid + r.paid, balance: t.balance + r.balance }), { revenue: 0, commission: 0, paid: 0, balance: 0 });
-  const companyShare = Math.round(totals.revenue * 100 - totals.commission * 100) / 100;
+  /* ---- per-student rate overrides ---- */
+  const saveStudentRates = async () => {
+    const iVal = editRate.i === "" ? null : Math.max(0, Math.min(100, Number(editRate.i)));
+    const cVal = editRate.c === "" ? null : Math.max(0, Math.min(100, Number(editRate.c)));
+    await saveClasses(classes.map((c) => c.id !== editRate.classId ? c : ({
+      ...c,
+      enrolled: (c.enrolled || []).map((s) => {
+        if (s.ref !== editRate.ref) return s;
+        const upd = { ...s };
+        if (iVal == null) delete upd.instrRate; else upd.instrRate = iVal;
+        if (cVal == null) delete upd.companyRate; else upd.companyRate = cVal;
+        return upd;
+      }),
+    })));
+    setEditRate(null);
+  };
+
+  /* ---- daily payment report ---- */
+  const dates = [...new Set(payments.map((p) => p.date))].sort().reverse();
+  const daily = dates.map((d) => {
+    const rows = payments.filter((p) => p.date === d);
+    return { date: d, rows, total: round2(rows.reduce((s, p) => s + Number(p.amount || 0), 0)) };
+  });
 
   const addPayment = async () => {
     if (!pf.payee || !Number(pf.amount)) return;
-    await savePayments([{ id: uid(), payee: pf.payee, company: companyOf(pf.payee) || "", amount: Number(pf.amount), date: pf.date, note: pf.note.trim(), recordedBy: adminName, recordedAt: new Date().toISOString() }, ...payments]);
-    setPf({ payee: "", amount: "", date: new Date().toISOString().slice(0, 10), note: "" });
+    await savePayments([{ id: uid(), payeeType: pf.type, payee: pf.payee, company: pf.type === "company" ? pf.payee : companyOf(pf.payee) || "", amount: Number(pf.amount), date: pf.date, note: pf.note.trim(), recordedBy: adminName, recordedAt: new Date().toISOString() }, ...payments]);
+    setPf({ type: pf.type, payee: "", amount: "", date: new Date().toISOString().slice(0, 10), note: "" });
   };
   const removePayment = async (id) => savePayments(payments.filter((p) => p.id !== id));
 
-  const exportEarnings = () => rows.map((r) => ({ "Instructor": r.instructor, "Company": r.company, "Classes": r.classes, "Students": r.students, "Revenue": r.revenue.toFixed(2), [`Commission (${rate}%)`]: r.commission.toFixed(2), "Payments Made": r.paid.toFixed(2), "Balance Due": r.balance.toFixed(2) }));
-  const exportPayments = () => payments.map((p) => ({ "Date": p.date, "Payee": p.payee, "Company": p.company || "", "Amount": Number(p.amount).toFixed(2), "Note": p.note || "", "Recorded By": p.recordedBy || "" }));
+  /* ---- exports ---- */
+  const earningsRows = () => [
+    ...iRows.map((r) => ({ "Type": "Instructor", "Payee": r.payee, "Company": r.company, "Students": r.students, "Revenue": r.revenue.toFixed(2), "Commission": r.commission.toFixed(2), "Payments Made": r.paid.toFixed(2), "Balance Due": r.balance.toFixed(2) })),
+    ...cRows.map((r) => ({ "Type": "Company", "Payee": r.payee, "Company": "", "Students": r.students, "Revenue": r.revenue.toFixed(2), "Commission": r.commission.toFixed(2), "Payments Made": r.paid.toFixed(2), "Balance Due": r.balance.toFixed(2) })),
+  ];
+  const rateRows = () => studentRows.map((r) => ({ "Class": r.classId, "Date": r.date, "Instructor": r.instructor, "Company": r.company, "Student": r.student, "Ref": r.ref, "Paid": r.paid.toFixed(2), "Instructor %": r.iRate, "Company %": r.cRate, "Instructor Commission": r.iCom.toFixed(2), "Company Commission": r.cCom.toFixed(2), "Custom Rates": r.overridden ? "Yes" : "" }));
+  const paymentRows = () => payments.map((p) => ({ "Date": p.date, "Payee": p.payee, "Type": (p.payeeType || "instructor") === "company" ? "Company" : "Instructor", "Amount": Number(p.amount).toFixed(2), "Note": p.note || "", "Recorded By": p.recordedBy || "" }));
+  const dailyExportRows = () => daily.flatMap((d) => [
+    ...d.rows.map((p) => ({ "Date": p.date, "Payee": p.payee, "Type": (p.payeeType || "instructor") === "company" ? "Company" : "Instructor", "Amount": Number(p.amount).toFixed(2), "Note": p.note || "", "Recorded By": p.recordedBy || "" })),
+    { "Date": d.date, "Payee": "— DAY TOTAL —", "Type": "", "Amount": d.total.toFixed(2), "Note": "", "Recorded By": "" },
+  ]);
 
-  const selStyle = { padding: "9px 12px", border: `1px solid ${C.line}`, fontSize: 14, ...body, background: C.panel2, color: C.text, minWidth: 160 };
-  const smallBtn = { ...mono, fontSize: 11, background: "none", border: `1px solid ${C.line}`, color: C.warn, padding: "4px 8px", cursor: "pointer", borderRadius: 2 };
+  const selStyle = { padding: "9px 12px", border: `1px solid ${C.line}`, fontSize: 14, ...body, background: C.panel2, color: C.text, minWidth: 150 };
+  const smallBtn = { ...mono, fontSize: 11, background: "none", border: `1px solid ${C.bronzeDark}`, color: C.bronze, padding: "4px 8px", cursor: "pointer", borderRadius: 2 };
+  const th = { ...mono, fontSize: 11, color: C.muted, padding: "9px 10px", borderBottom: `1px solid ${C.line}`, whiteSpace: "nowrap", textAlign: "left" };
+  const td = { padding: "8px 10px", borderBottom: `1px solid ${C.panel2}` };
+  const tdm = { ...td, ...mono, fontSize: 12 };
+
+  const EarningsTable = ({ title, rows, rateLabel, totals }) => (
+    <div>
+      <div style={{ ...display, fontWeight: 700, fontSize: 18, textTransform: "uppercase", color: C.bronzeLight, marginBottom: 8 }}>{title}</div>
+      {rows.length === 0 ? <p style={{ color: C.muted, fontSize: 14 }}>Nothing to tally yet.</p> : (
+        <div className="gs-table-wrap">
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, background: C.panel, border: `1px solid ${C.line}`, minWidth: 760 }}>
+            <thead><tr style={{ background: C.panel2 }}>
+              {["PAYEE", ...(title.includes("Instructor") ? ["COMPANY"] : []), "STUDENTS", "REVENUE", rateLabel, "PAID", "BALANCE DUE"].map((h) => <th key={h} style={th}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.payee}>
+                  <td style={{ ...td, fontWeight: 600 }}>{r.payee}</td>
+                  {title.includes("Instructor") && <td style={td}>{r.company}</td>}
+                  <td style={td}>{r.students}</td>
+                  <td style={tdm}>{money(r.revenue)}</td>
+                  <td style={{ ...tdm, color: C.bronzeLight }}>{money(r.commission)}</td>
+                  <td style={tdm}>{money(r.paid)}</td>
+                  <td style={{ ...tdm, color: r.balance > 0 ? C.warn : C.ok, fontWeight: 600 }}>{money(r.balance)}</td>
+                </tr>
+              ))}
+              <tr style={{ background: C.panel2 }}>
+                <td colSpan={title.includes("Instructor") ? 3 : 2} style={{ ...tdm, color: C.bronzeLight }}>TOTALS</td>
+                <td style={{ ...tdm, color: C.bronzeLight }}>{money(totals.revenue)}</td>
+                <td style={{ ...tdm, color: C.bronzeLight }}>{money(totals.commission)}</td>
+                <td style={{ ...tdm, color: C.bronzeLight }}>{money(totals.paid)}</td>
+                <td style={{ ...tdm, color: totals.balance > 0 ? C.warn : C.ok }}>{money(totals.balance)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
 
   return (
-    <div style={{ display: "grid", gap: 24 }}>
+    <div style={{ display: "grid", gap: 28 }}>
       {printOpen && (
-        <AdminPrintModal title="Commission Report" subtitle={`COMMISSION RATE ${rate}% OF REVENUE`}
-          columns={[["instructor","INSTRUCTOR"],["company","COMPANY"],["classes","CLASSES"],["students","STUDENTS"],["revenueF","REVENUE"],["commissionF","COMMISSION"],["paidF","PAID"],["balanceF","BALANCE DUE"]]}
-          rows={rows.map((r) => ({ ...r, revenueF: money(r.revenue), commissionF: money(r.commission), paidF: money(r.paid), balanceF: money(r.balance) }))}
-          footerNote={`Totals — revenue ${money(totals.revenue)} · instructor commissions ${money(totals.commission)} · payments made ${money(totals.paid)} · balance outstanding ${money(totals.balance)} · company share ${money(companyShare)}.`}
+        <AdminPrintModal title="Commission Report" subtitle={`INSTRUCTOR ${instrRateDefault}% · COMPANY ${companyRateDefault}% (DEFAULTS — PER-STUDENT RATES APPLY)`}
+          columns={[["Type","TYPE"],["Payee","PAYEE"],["Company","COMPANY"],["Students","STUDENTS"],["Revenue","REVENUE"],["Commission","COMMISSION"],["Payments Made","PAID"],["Balance Due","BALANCE DUE"]]}
+          rows={earningsRows().map((r) => ({ ...r, Revenue: "$" + r.Revenue, Commission: "$" + r.Commission, "Payments Made": "$" + r["Payments Made"], "Balance Due": "$" + r["Balance Due"] }))}
+          footerNote={`Instructor commissions ${money(iTot.commission)} (balance ${money(iTot.balance)}) · Company commissions ${money(cTot.commission)} (balance ${money(cTot.balance)}).`}
           onClose={() => setPrintOpen(false)} />
       )}
+      {dailyPrintOpen && (
+        <AdminPrintModal title="Daily Commission Payments" subtitle={`${payments.length} PAYMENTS ACROSS ${daily.length} DAY${daily.length === 1 ? "" : "S"}`}
+          columns={[["Date","DATE"],["Payee","PAYEE"],["Type","TYPE"],["Amount","AMOUNT"],["Note","NOTE"],["Recorded By","RECORDED BY"]]}
+          rows={dailyExportRows().map((r) => ({ ...r, Amount: "$" + r.Amount }))}
+          footerNote={`Total payments recorded: ${money(payments.reduce((s, p) => s + Number(p.amount || 0), 0))}.`}
+          onClose={() => setDailyPrintOpen(false)} />
+      )}
 
-      {/* rate + exports */}
+      {/* default rates + report exports */}
       <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap", background: C.panel, border: `1px solid ${C.line}`, padding: "14px 16px" }}>
         <div>
-          <FieldLabel>Instructor commission rate (% of revenue)</FieldLabel>
-          <input type="number" value={rateInput} onChange={(e) => setRateInput(e.target.value)} style={{ ...selStyle, width: 120 }} />
+          <FieldLabel>Instructor rate (default % per student)</FieldLabel>
+          <input type="number" value={rateInput} onChange={(e) => setRateInput(e.target.value)} style={{ ...selStyle, width: 110 }} />
         </div>
-        <Btn small onClick={() => saveSettings({ ...settings, commissionRate: Math.max(0, Math.min(100, Number(rateInput) || 0)) })}>Save rate</Btn>
+        <div>
+          <FieldLabel>Company rate (default % per student)</FieldLabel>
+          <input type="number" value={companyRateInput} onChange={(e) => setCompanyRateInput(e.target.value)} style={{ ...selStyle, width: 110 }} />
+        </div>
+        <Btn small onClick={() => saveSettings({ ...settings, commissionRate: Math.max(0, Math.min(100, Number(rateInput) || 0)), companyRate: Math.max(0, Math.min(100, Number(companyRateInput) || 0)) })}>Save rates</Btn>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <Btn small ghost onClick={() => exportRowsCSV(exportEarnings(), "commission-report.csv")}>Export .csv</Btn>
-          <Btn small ghost onClick={() => exportSheetsXLSX([{ name: "Earnings", rows: exportEarnings() }, { name: "Payments", rows: exportPayments() }], "commission-report.xlsx")}>Export .xlsx</Btn>
+          <Btn small ghost onClick={() => exportRowsCSV(earningsRows(), "commission-report.csv")}>Export .csv</Btn>
+          <Btn small ghost onClick={() => exportSheetsXLSX([{ name: "Instructor Earnings", rows: earningsRows().filter((r) => r.Type === "Instructor") }, { name: "Company Earnings", rows: earningsRows().filter((r) => r.Type === "Company") }, { name: "Per-Student Rates", rows: rateRows() }, { name: "Payments", rows: paymentRows() }], "commission-report.xlsx")}>Export .xlsx</Btn>
           <Btn small onClick={() => setPrintOpen(true)}>Print / PDF</Btn>
         </div>
       </div>
 
-      {/* earnings table */}
-      <div className="gs-table-wrap">
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, background: C.panel, border: `1px solid ${C.line}`, minWidth: 820 }}>
-          <thead>
-            <tr style={{ textAlign: "left", background: C.panel2 }}>
-              {["INSTRUCTOR", "COMPANY", "CLASSES", "STUDENTS", "REVENUE", `COMMISSION (${rate}%)`, "PAID", "BALANCE DUE"].map((h) => (
-                <th key={h} style={{ ...mono, fontSize: 11, color: C.muted, padding: "9px 10px", borderBottom: `1px solid ${C.line}`, whiteSpace: "nowrap" }}>{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.instructor}>
-                <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}`, fontWeight: 600 }}>{r.instructor}</td>
-                <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}` }}>{r.company}</td>
-                <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}` }}>{r.classes}</td>
-                <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}` }}>{r.students}</td>
-                <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12 }}>{money(r.revenue)}</td>
-                <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12, color: C.bronzeLight }}>{money(r.commission)}</td>
-                <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12 }}>{money(r.paid)}</td>
-                <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12, color: r.balance > 0 ? C.warn : C.ok, fontWeight: 600 }}>{money(r.balance)}</td>
-              </tr>
-            ))}
-            <tr style={{ background: C.panel2 }}>
-              <td colSpan={4} style={{ padding: "10px", ...mono, fontSize: 12, color: C.bronzeLight }}>TOTALS · company share after commissions: {money(companyShare)}</td>
-              <td style={{ padding: "10px", ...mono, fontSize: 12, color: C.bronzeLight }}>{money(totals.revenue)}</td>
-              <td style={{ padding: "10px", ...mono, fontSize: 12, color: C.bronzeLight }}>{money(totals.commission)}</td>
-              <td style={{ padding: "10px", ...mono, fontSize: 12, color: C.bronzeLight }}>{money(totals.paid)}</td>
-              <td style={{ padding: "10px", ...mono, fontSize: 12, color: totals.balance > 0 ? C.warn : C.ok }}>{money(totals.balance)}</td>
-            </tr>
-          </tbody>
-        </table>
+      <EarningsTable title="Instructor commissions" rows={iRows} rateLabel="COMMISSION" totals={iTot} />
+      <EarningsTable title="Company commissions" rows={cRows} rateLabel="COMMISSION" totals={cTot} />
+
+      {/* per-student rates */}
+      <div>
+        <div style={{ ...display, fontWeight: 700, fontSize: 18, textTransform: "uppercase", color: C.bronzeLight, marginBottom: 4 }}>Per-student commission rates</div>
+        <p style={{ color: C.muted, fontSize: 13, margin: "0 0 10px" }}>Each registration uses the default rates unless overridden here. Blank = use default.</p>
+        {studentRows.length === 0 ? <p style={{ color: C.muted }}>No registrations yet.</p> : (
+          <div className="gs-table-wrap">
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, background: C.panel, border: `1px solid ${C.line}`, minWidth: 900 }}>
+              <thead><tr style={{ background: C.panel2 }}>
+                {["CLASS", "DATE", "STUDENT", "INSTRUCTOR", "COMPANY", "PAID", "INSTR %", "INSTR $", "CO %", "CO $", ""].map((h, i) => <th key={i} style={th}>{h}</th>)}
+              </tr></thead>
+              <tbody>
+                {studentRows.map((r) => (
+                  <React.Fragment key={r.ref}>
+                    <tr>
+                      <td style={tdm}>{r.classId}</td>
+                      <td style={tdm}>{r.date}</td>
+                      <td style={{ ...td, fontWeight: 600 }}>{r.student}</td>
+                      <td style={td}>{r.instructor}</td>
+                      <td style={td}>{r.company}</td>
+                      <td style={tdm}>{money(r.paid)}</td>
+                      <td style={{ ...tdm, color: r.overridden ? C.bronzeLight : C.muted }}>{r.iRate}%</td>
+                      <td style={tdm}>{money(r.iCom)}</td>
+                      <td style={{ ...tdm, color: r.overridden ? C.bronzeLight : C.muted }}>{r.cRate}%</td>
+                      <td style={tdm}>{money(r.cCom)}</td>
+                      <td style={td}>
+                        <button onClick={() => setEditRate({ classId: r.classId, ref: r.ref, student: r.student, i: r.overridden && r.iRate !== instrRateDefault ? String(r.iRate) : "", c: r.overridden && r.cRate !== companyRateDefault ? String(r.cRate) : "" })} style={smallBtn}>Set rates</button>
+                      </td>
+                    </tr>
+                    {editRate && editRate.ref === r.ref && (
+                      <tr><td colSpan={11} style={{ ...td, background: C.panel2 }}>
+                        <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
+                          <span style={{ ...mono, fontSize: 12, color: C.muted }}>Custom rates for {editRate.student}:</span>
+                          <div><FieldLabel>Instructor % (blank = {instrRateDefault})</FieldLabel><input type="number" value={editRate.i} onChange={(e) => setEditRate({ ...editRate, i: e.target.value })} style={{ ...selStyle, width: 110 }} /></div>
+                          <div><FieldLabel>Company % (blank = {companyRateDefault})</FieldLabel><input type="number" value={editRate.c} onChange={(e) => setEditRate({ ...editRate, c: e.target.value })} style={{ ...selStyle, width: 110 }} /></div>
+                          <Btn small onClick={saveStudentRates}>Save</Btn>
+                          <Btn small ghost onClick={() => setEditRate(null)}>Cancel</Btn>
+                        </div>
+                      </td></tr>
+                    )}
+                  </React.Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* record a payment */}
-      <div style={{ background: C.panel, border: `1px solid ${C.line}`, padding: "18px 20px", display: "grid", gap: 12, maxWidth: 640 }}>
+      <div style={{ background: C.panel, border: `1px solid ${C.line}`, padding: "18px 20px", display: "grid", gap: 12 }}>
         <div style={{ ...display, fontWeight: 700, fontSize: 18, textTransform: "uppercase", color: C.bronzeLight }}>Record a payment</div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
           <div>
-            <FieldLabel>Payee (instructor / company)</FieldLabel>
-            <select value={pf.payee} onChange={(e) => setPf({ ...pf, payee: e.target.value })} style={selStyle}>
-              <option value="">Select…</option>
-              {rows.map((r) => <option key={r.instructor} value={r.instructor}>{r.instructor}{r.company !== "—" ? ` (${r.company})` : ""}</option>)}
+            <FieldLabel>Pay to</FieldLabel>
+            <select value={pf.type} onChange={(e) => setPf({ ...pf, type: e.target.value, payee: "" })} style={selStyle}>
+              <option value="instructor">Instructor</option>
+              <option value="company">Company</option>
             </select>
           </div>
-          <div><FieldLabel>Amount ($)</FieldLabel><input type="number" value={pf.amount} onChange={(e) => setPf({ ...pf, amount: e.target.value })} style={{ ...selStyle, width: 120 }} /></div>
+          <div>
+            <FieldLabel>Payee</FieldLabel>
+            <select value={pf.payee} onChange={(e) => setPf({ ...pf, payee: e.target.value })} style={selStyle}>
+              <option value="">Select…</option>
+              {(pf.type === "company" ? cRows : iRows).map((r) => <option key={r.payee} value={r.payee}>{r.payee}</option>)}
+            </select>
+          </div>
+          <div><FieldLabel>Amount ($)</FieldLabel><input type="number" value={pf.amount} onChange={(e) => setPf({ ...pf, amount: e.target.value })} style={{ ...selStyle, width: 110 }} /></div>
           <div><FieldLabel>Date</FieldLabel><input type="date" value={pf.date} onChange={(e) => setPf({ ...pf, date: e.target.value })} style={{ ...selStyle, colorScheme: "dark" }} /></div>
           <div style={{ flex: 1, minWidth: 160 }}><FieldLabel>Note (optional)</FieldLabel><input value={pf.note} onChange={(e) => setPf({ ...pf, note: e.target.value })} placeholder="e.g. July payout — check #1042" style={{ ...selStyle, width: "100%", boxSizing: "border-box" }} /></div>
           <Btn small onClick={addPayment} disabled={!pf.payee || !Number(pf.amount)}>Record payment</Btn>
         </div>
       </div>
 
-      {/* payment history */}
+      {/* daily payment report */}
       <div>
-        <div style={{ ...display, fontWeight: 700, fontSize: 18, textTransform: "uppercase", color: C.bronzeLight, marginBottom: 8 }}>Payment history</div>
-        {payments.length === 0 ? <p style={{ color: C.muted }}>No payments recorded yet.</p> : (
-          <div style={{ display: "grid", gap: 8 }}>
-            {payments.map((p) => (
-              <div key={p.id} style={{ background: C.panel, border: `1px solid ${C.line}`, padding: "10px 14px", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", ...mono, fontSize: 12 }}>
-                <span>{fmtDate(p.date)}</span>
-                <span style={{ color: C.text, ...body, fontSize: 14, fontWeight: 600 }}>{p.payee}</span>
-                {p.company && <span style={{ color: C.muted }}>{p.company}</span>}
-                {p.note && <span style={{ color: C.muted }}>{p.note}</span>}
-                <span style={{ marginLeft: "auto", color: C.ok, fontSize: 14 }}>{money(p.amount)}</span>
-                <button onClick={() => removePayment(p.id)} style={smallBtn}>Delete</button>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+          <div style={{ ...display, fontWeight: 700, fontSize: 18, textTransform: "uppercase", color: C.bronzeLight }}>Daily payment report</div>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <Btn small ghost onClick={() => exportRowsCSV(dailyExportRows(), "daily-commission-payments.csv")}>Export .csv</Btn>
+            <Btn small ghost onClick={() => exportSheetsXLSX([{ name: "Daily Payments", rows: dailyExportRows() }, { name: "Daily Totals", rows: daily.map((d) => ({ "Date": d.date, "Payments": d.rows.length, "Total": d.total.toFixed(2) })) }], "daily-commission-payments.xlsx")}>Export .xlsx</Btn>
+            <Btn small onClick={() => setDailyPrintOpen(true)}>Print / PDF</Btn>
+          </div>
+        </div>
+        {daily.length === 0 ? <p style={{ color: C.muted }}>No payments recorded yet.</p> : (
+          <div style={{ display: "grid", gap: 14 }}>
+            {daily.map((d) => (
+              <div key={d.date} style={{ background: C.panel, border: `1px solid ${C.line}` }}>
+                <div style={{ display: "flex", gap: 12, alignItems: "center", padding: "10px 14px", borderBottom: `1px solid ${C.panel2}`, background: C.panel2 }}>
+                  <span style={{ ...display, fontWeight: 700, fontSize: 16, color: C.bronzeLight }}>{fmtDate(d.date)}</span>
+                  <span style={{ ...mono, fontSize: 12, color: C.muted }}>{d.rows.length} payment{d.rows.length === 1 ? "" : "s"}</span>
+                  <span style={{ marginLeft: "auto", ...mono, fontSize: 13, color: C.ok }}>DAY TOTAL {money(d.total)}</span>
+                </div>
+                {d.rows.map((p) => (
+                  <div key={p.id} style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", padding: "8px 14px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12 }}>
+                    <span style={{ color: C.text, ...body, fontSize: 14, fontWeight: 600 }}>{p.payee}</span>
+                    <span style={{ ...mono, fontSize: 10, letterSpacing: "0.1em", background: (p.payeeType || "instructor") === "company" ? "#2C3138" : "#2E2718", color: (p.payeeType || "instructor") === "company" ? C.steel : C.bronze, padding: "2px 7px", borderRadius: 2 }}>
+                      {(p.payeeType || "instructor") === "company" ? "COMPANY" : "INSTRUCTOR"}
+                    </span>
+                    {p.note && <span style={{ color: C.muted }}>{p.note}</span>}
+                    <span style={{ color: C.muted }}>by {p.recordedBy || "—"}</span>
+                    <span style={{ marginLeft: "auto", color: C.ok, fontSize: 14 }}>{money(p.amount)}</span>
+                    <button onClick={() => removePayment(p.id)} style={{ ...smallBtn, color: C.warn, border: `1px solid ${C.line}` }}>Delete</button>
+                  </div>
+                ))}
               </div>
             ))}
           </div>

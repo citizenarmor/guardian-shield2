@@ -302,7 +302,7 @@ async function handleStorage(req, key, sess) {
   //  - admins: media, plus reporting/user-management data (certs, classes, payments, settings)
   const instructorKeys = /^gs:(classes|certs|apps|notices|codes|requests|resume:.+)$/;
   const adminReadable = ["gs:media", "gs:certs", "gs:classes", "gs:payments", "gs:settings"];
-  const adminWritable = ["gs:media", "gs:certs", "gs:payments", "gs:settings"];
+  const adminWritable = ["gs:media", "gs:certs", "gs:classes", "gs:payments", "gs:settings"];
 
   const canRead = sess.role === "instructor"
     ? key === "gs:media" || instructorKeys.test(key)
