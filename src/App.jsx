@@ -1276,7 +1276,7 @@ function RequestClassModal({ onClose, onSubmit }) {
 
 function RegisterModal({ cls, onClose, onComplete, onRemoteComplete, codes = [], redeemCode, apps = [], consumePasscode }) {
   const isInstructorClass = cls.type === "instructor";
-  const [f, setF] = useState({ name: "", email: "", phone: "", waiver: false });
+  const [f, setF] = useState({ name: "", email: "", phone: "", company: "", waiver: false });
   const [step, setStep] = useState(1);
   const [paying, setPaying] = useState(false);
   const [codeInput, setCodeInput] = useState("");
@@ -1343,7 +1343,7 @@ function RegisterModal({ cls, onClose, onComplete, onRemoteComplete, codes = [],
     try {
       const r = await apiPost("register", {
         classId: cls.id,
-        student: { name: f.name, email: f.email, phone: f.phone },
+        student: { name: f.name, email: f.email, phone: f.phone, company: f.company },
         discountCode: applied ? applied.code.toUpperCase() : "",
         passcode: isInstructorClass ? passcode : "",
       });
@@ -1377,6 +1377,9 @@ function RegisterModal({ cls, onClose, onComplete, onRemoteComplete, codes = [],
           <Field label="Full name" value={f.name} onChange={set("name")} placeholder="Jordan Whitfield" />
           <Field label="Email" value={f.email} onChange={set("email")} placeholder="you@example.com" type="email" />
           <Field label="Phone" value={f.phone} onChange={set("phone")} placeholder="(555) 201-4477" />
+          {isInstructorClass && (
+            <Field label="Company (optional)" value={f.company} onChange={set("company")} placeholder="Your company or agency" />
+          )}
           {isInstructorClass && (
             <div>
               <FieldLabel>Instructor approval passcode</FieldLabel>
@@ -1517,7 +1520,7 @@ function Verify({ certs }) {
    BECOME AN INSTRUCTOR
    ============================================================ */
 function InstructorApply({ apps, updateApps, go, classes }) {
-  const [f, setF] = useState({ name: "", email: "", phone: "", background: "" });
+  const [f, setF] = useState({ name: "", company: "", email: "", phone: "", background: "" });
   const [sent, setSent] = useState(false);
   const [resume, setResume] = useState(null);      // { name, dataUrl }
   const [resumeErr, setResumeErr] = useState(null);
@@ -1594,6 +1597,7 @@ function InstructorApply({ apps, updateApps, go, classes }) {
           ) : (
             <div style={{ display: "grid", gap: 12 }}>
               <Field label="Full name" value={f.name} onChange={set("name")} />
+              <Field label="Company (optional)" value={f.company} onChange={set("company")} placeholder="Your company or agency" />
               <Field label="Email" value={f.email} onChange={set("email")} type="email" />
               <Field label="Phone" value={f.phone} onChange={set("phone")} />
               <div>
@@ -2197,6 +2201,7 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts }) {
                   <th style={{ padding: "6px 8px", borderBottom: `1px solid ${C.line}` }}>STUDENT</th>
                   <th style={{ padding: "6px 8px", borderBottom: `1px solid ${C.line}` }}>EMAIL</th>
                   <th style={{ padding: "6px 8px", borderBottom: `1px solid ${C.line}` }}>PHONE</th>
+                  <th style={{ padding: "6px 8px", borderBottom: `1px solid ${C.line}` }}>COMPANY</th>
                   <th style={{ padding: "6px 8px", borderBottom: `1px solid ${C.line}` }}>REF</th>
                 </tr>
               </thead>
@@ -2206,6 +2211,7 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts }) {
                     <td style={{ padding: "6px 8px", borderBottom: `1px solid ${C.panel2}` }}>{s.name}</td>
                     <td style={{ padding: "6px 8px", borderBottom: `1px solid ${C.panel2}` }}>{s.email}</td>
                     <td style={{ padding: "6px 8px", borderBottom: `1px solid ${C.panel2}` }}>{s.phone || "—"}</td>
+                    <td style={{ padding: "6px 8px", borderBottom: `1px solid ${C.panel2}` }}>{s.company || "—"}</td>
                     <td style={{ padding: "6px 8px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12 }}>{s.ref}</td>
                   </tr>
                 ))}
@@ -2566,7 +2572,7 @@ function PortalApps({ apps, updateApps }) {
                     <span style={{ ...mono, fontSize: 10, letterSpacing: "0.12em", background: s.bg, color: s.color, padding: "2px 8px", borderRadius: 2 }}>{s.label}</span>
                   ); })()}
                   {!a.read && <span style={{ ...mono, fontSize: 10, letterSpacing: "0.12em", background: C.bronze, color: "#1A1509", padding: "2px 7px", borderRadius: 2 }}>NEW</span>}
-                  <span style={{ ...mono, fontSize: 12, color: C.muted }}>{a.email} · {a.phone || "no phone"}</span>
+                  <span style={{ ...mono, fontSize: 12, color: C.muted }}>{a.company ? `${a.company} · ` : ""}{a.email} · {a.phone || "no phone"}</span>
                   <span style={{ ...mono, fontSize: 11, marginLeft: "auto", color: C.muted }}>submitted {new Date(a.submittedAt).toLocaleDateString()}</span>
                 </div>
                 <p style={{ margin: "8px 0 0", fontSize: 14, color: C.text, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{a.background}</p>
@@ -3500,7 +3506,7 @@ function AdminClassReport({ classes, accounts }) {
   const studentRows = () => filtered.flatMap((r) => r.students.map((s) => ({
     "Class ID": r.id, "Date": r.date, "Type": r.type === "instructor" ? "Instructor Course" : "2-Day Certification",
     "Location": r.location, "City": r.city || "", "State": r.state || "", "Instructor": r.instructor, "Company": r.company,
-    "Student": s.name, "Email": s.email, "Phone": s.phone || "", "Ref": s.ref, "Discount Code": s.discountCode || "", "Paid": (typeof s.paid === "number" ? s.paid : r.price).toFixed(2),
+    "Student": s.name, "Student Company": s.company || "", "Email": s.email, "Phone": s.phone || "", "Ref": s.ref, "Discount Code": s.discountCode || "", "Paid": (typeof s.paid === "number" ? s.paid : r.price).toFixed(2),
   })));
   const classRows = () => filtered.map((r) => ({
     "Class ID": r.id, "Date": r.date, "Type": r.type === "instructor" ? "Instructor Course" : "2-Day Certification",
@@ -3562,6 +3568,7 @@ function AdminClassReport({ classes, accounts }) {
                         {r.students.map((s) => (
                           <div key={s.ref} style={{ ...mono, fontSize: 12, color: C.muted, display: "flex", gap: 10, flexWrap: "wrap" }}>
                             <span style={{ color: C.text }}>{s.name}</span>
+                            {s.company && <span style={{ color: C.steel }}>{s.company}</span>}
                             <span>{s.email}</span>
                             {s.phone && <span>{s.phone}</span>}
                             <span>{s.ref}</span>

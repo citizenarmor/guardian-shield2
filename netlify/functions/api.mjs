@@ -370,6 +370,7 @@ async function handleRegister(body) {
 
   const record = {
     name: student.name.trim(), email: student.email.trim(), phone: (student.phone || "").trim(),
+    company: (student.company || "").trim(),
     ref: "REG-" + uid(), registeredAt: new Date().toISOString(),
     discountCode: appliedCode, paid,
   };
@@ -411,7 +412,7 @@ async function handleCheckPasscode(url) {
 }
 
 async function handleApply(body) {
-  const { name, email, phone, background, resumeName, resumeDataUrl } = body;
+  const { name, company, email, phone, background, resumeName, resumeDataUrl } = body;
   if (!name?.trim() || !/@/.test(email || "") || !background?.trim()) return bad("Name, email, and background are required.");
   const id = uid();
   if (resumeDataUrl) {
@@ -421,7 +422,7 @@ async function handleApply(body) {
   }
   const apps = await readJson("gs:apps", []);
   apps.unshift({
-    id, name: name.trim(), email: email.trim(), phone: (phone || "").trim(),
+    id, name: name.trim(), company: (company || "").trim(), email: email.trim(), phone: (phone || "").trim(),
     background: background.trim(), resumeName: resumeName || "",
     submittedAt: new Date().toISOString(), status: "pending",
   });
