@@ -3591,15 +3591,82 @@ function AdminClassReport({ classes, accounts }) {
 }
 
 /* ---------- Commissions tab ---------- */
+function PaymentStatementModal({ payment, onClose }) {
+  const ink = "#2B2415", bronze = "#8F6F2E";
+  const items = payment.items || [];
+  const exportRows = () => items.map((i) => ({
+    "Payment Date": payment.date, "Check / EFT": payment.checkRef || "", "Payee": payment.payee,
+    "Payee Type": (payment.payeeType || "instructor") === "company" ? "Company" : "Instructor",
+    "Class": i.classId, "Class Date": i.date, "Student": i.student, "Ref": i.ref,
+    "Student Paid": Number(i.paid).toFixed(2), "Rate %": i.rate, "Commission": Number(i.commission).toFixed(2),
+  }));
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(6,5,3,.8)", zIndex: 80, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: 16, overflowY: "auto" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 900 }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+          <Btn small ghost onClick={() => exportRowsCSV(exportRows(), `statement-${payment.payee.replace(/\s+/g, "-")}-${payment.date}.csv`)}>Export .csv</Btn>
+          <Btn small ghost onClick={() => exportSheetsXLSX([{ name: "Statement", rows: exportRows() }], `statement-${payment.payee.replace(/\s+/g, "-")}-${payment.date}.xlsx`)}>Export .xlsx</Btn>
+          <Btn small onClick={() => window.print()}>Print / Save as PDF</Btn>
+          <Btn small ghost onClick={onClose}>Close</Btn>
+        </div>
+        <div className="print-sheet" style={{ background: "#FFFFFF", color: ink, padding: "34px 40px", boxSizing: "border-box", boxShadow: "0 16px 50px rgba(0,0,0,.6)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 16, borderBottom: `3px solid ${bronze}`, paddingBottom: 12 }}>
+            <img src={LOGO} alt="Guardian seal" style={{ width: 54, height: 54, borderRadius: "50%" }} />
+            <div>
+              <div style={{ ...display, fontWeight: 800, fontSize: 24, textTransform: "uppercase", letterSpacing: "0.04em" }}>Commission Payment Statement</div>
+              <div style={{ ...mono, fontSize: 11, letterSpacing: "0.16em", color: bronze }}>GUARDIAN SHIELD TRAINING</div>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 30, flexWrap: "wrap", marginTop: 16, fontSize: 13 }}>
+            <div><div style={{ ...mono, fontSize: 9, letterSpacing: "0.14em", color: bronze }}>PAID TO</div><div style={{ fontWeight: 700, fontSize: 16 }}>{payment.payee}</div><div style={{ fontSize: 11, color: "#6B6046" }}>{(payment.payeeType || "instructor") === "company" ? "Company" : "Instructor"}{payment.company && (payment.payeeType || "instructor") !== "company" ? ` · ${payment.company}` : ""}</div></div>
+            <div><div style={{ ...mono, fontSize: 9, letterSpacing: "0.14em", color: bronze }}>PAYMENT DATE</div><div style={{ fontWeight: 700 }}>{fmtDate(payment.date)}</div></div>
+            <div><div style={{ ...mono, fontSize: 9, letterSpacing: "0.14em", color: bronze }}>CHECK # / EFT RECORD</div><div style={{ ...mono, fontWeight: 700 }}>{payment.checkRef || "—"}</div></div>
+            <div><div style={{ ...mono, fontSize: 9, letterSpacing: "0.14em", color: bronze }}>RECORDED BY</div><div>{payment.recordedBy || "—"}</div></div>
+          </div>
+          {payment.note && <div style={{ ...serif, fontSize: 12, marginTop: 10, color: "#3A3222" }}>Note: {payment.note}</div>}
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, marginTop: 16 }}>
+            <thead><tr style={{ textAlign: "left" }}>
+              {["CLASS DATE", "CLASS", "STUDENT", "REF", "STUDENT PAID", "RATE", "COMMISSION"].map((h) => (
+                <th key={h} style={{ ...mono, fontSize: 9, letterSpacing: "0.08em", color: bronze, padding: "5px 6px", borderBottom: `2px solid ${bronze}` }}>{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {items.map((i) => (
+                <tr key={i.ref}>
+                  <td style={{ padding: "5px 6px", borderBottom: "1px solid #E3DCC8" }}>{i.date}</td>
+                  <td style={{ padding: "5px 6px", borderBottom: "1px solid #E3DCC8" }}>{i.classId}</td>
+                  <td style={{ padding: "5px 6px", borderBottom: "1px solid #E3DCC8" }}>{i.student}</td>
+                  <td style={{ padding: "5px 6px", borderBottom: "1px solid #E3DCC8", fontFamily: "monospace" }}>{i.ref}</td>
+                  <td style={{ padding: "5px 6px", borderBottom: "1px solid #E3DCC8" }}>{money(i.paid)}</td>
+                  <td style={{ padding: "5px 6px", borderBottom: "1px solid #E3DCC8" }}>{i.rate}%</td>
+                  <td style={{ padding: "5px 6px", borderBottom: "1px solid #E3DCC8", fontWeight: 700 }}>{money(i.commission)}</td>
+                </tr>
+              ))}
+              <tr>
+                <td colSpan={6} style={{ padding: "8px 6px", textAlign: "right", ...mono, fontSize: 10, letterSpacing: "0.1em", color: bronze }}>TOTAL PAYMENT — {items.length} STUDENT COMMISSION{items.length === 1 ? "" : "S"}</td>
+                <td style={{ padding: "8px 6px", fontWeight: 800, fontSize: 14, borderTop: `2px solid ${bronze}` }}>{money(payment.amount)}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div style={{ ...serif, fontStyle: "italic", fontSize: 12, color: bronze, marginTop: 14 }}>Protect what matters most.</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AdminCommissions({ classes, accounts, payments, savePayments, saveClasses, settings, saveSettings, adminName }) {
   const instrRateDefault = Number(settings.commissionRate ?? 20);
   const companyRateDefault = Number(settings.companyRate ?? 10);
   const [rateInput, setRateInput] = useState(String(instrRateDefault));
   const [companyRateInput, setCompanyRateInput] = useState(String(companyRateDefault));
-  const [pf, setPf] = useState({ type: "instructor", payee: "", amount: "", date: new Date().toISOString().slice(0, 10), note: "" });
   const [printOpen, setPrintOpen] = useState(false);
   const [dailyPrintOpen, setDailyPrintOpen] = useState(false);
-  const [editRate, setEditRate] = useState(null); // { classId, ref, i, c, student }
+  const [editRate, setEditRate] = useState(null);
+  const [statement, setStatement] = useState(null);
+  const [pb, setPb] = useState({ type: "instructor", payee: "", checkRef: "", date: new Date().toISOString().slice(0, 10), note: "" });
+  const [sel, setSel] = useState({});
+  const [pbErr, setPbErr] = useState(null);
 
   const round2 = (n) => Math.round(n * 100) / 100;
   const companyOf = (name) => {
@@ -3633,6 +3700,44 @@ function AdminCommissions({ classes, accounts, payments, savePayments, saveClass
   const tot = (rows) => rows.reduce((t, r) => ({ revenue: round2(t.revenue + r.revenue), commission: round2(t.commission + r.commission), paid: round2(t.paid + r.paid), balance: round2(t.balance + r.balance) }), { revenue: 0, commission: 0, paid: 0, balance: 0 });
   const iTot = tot(iRows), cTot = tot(cRows);
 
+  /* ---- payout builder: unpaid line items for the chosen payee ---- */
+  const settledRefs = (type, payee) => new Set(
+    payments.filter((p) => p.items && (p.payeeType || "instructor") === type && p.payee === payee).flatMap((p) => p.items.map((i) => i.ref))
+  );
+  const unpaidItems = !pb.payee ? [] : (() => {
+    const done = settledRefs(pb.type, pb.payee);
+    return studentRows
+      .filter((r) => (pb.type === "company" ? r.company === pb.payee : r.instructor === pb.payee))
+      .filter((r) => !done.has(r.ref))
+      .map((r) => ({ classId: r.classId, date: r.date, ref: r.ref, student: r.student, paid: r.paid, rate: pb.type === "company" ? r.cRate : r.iRate, commission: pb.type === "company" ? r.cCom : r.iCom }));
+  })();
+  const pickPayee = (type, payee) => {
+    setPb((p) => ({ ...p, type, payee }));
+    const done = payee ? settledRefs(type, payee) : new Set();
+    const next = {};
+    studentRows.filter((r) => (type === "company" ? r.company === payee : r.instructor === payee)).forEach((r) => { if (!done.has(r.ref)) next[r.ref] = true; });
+    setSel(next);
+    setPbErr(null);
+  };
+  const chosen = unpaidItems.filter((i) => sel[i.ref]);
+  const chosenTotal = round2(chosen.reduce((s, i) => s + i.commission, 0));
+
+  const recordPayout = async () => {
+    if (!pb.checkRef.trim()) return setPbErr("Enter the check number or EFT record for this payment.");
+    if (chosen.length === 0) return setPbErr("Select at least one student commission to pay.");
+    const payment = {
+      id: uid(), payeeType: pb.type, payee: pb.payee,
+      company: pb.type === "company" ? pb.payee : companyOf(pb.payee) || "",
+      amount: chosenTotal, date: pb.date, note: pb.note.trim(), checkRef: pb.checkRef.trim(),
+      items: chosen, recordedBy: adminName, recordedAt: new Date().toISOString(),
+    };
+    await savePayments([payment, ...payments]);
+    setStatement(payment);
+    setPb({ type: pb.type, payee: "", checkRef: "", date: new Date().toISOString().slice(0, 10), note: "" });
+    setSel({}); setPbErr(null);
+  };
+  const removePayment = async (id) => savePayments(payments.filter((p) => p.id !== id));
+
   /* ---- per-student rate overrides ---- */
   const saveStudentRates = async () => {
     const iVal = editRate.i === "" ? null : Math.max(0, Math.min(100, Number(editRate.i)));
@@ -3657,23 +3762,16 @@ function AdminCommissions({ classes, accounts, payments, savePayments, saveClass
     return { date: d, rows, total: round2(rows.reduce((s, p) => s + Number(p.amount || 0), 0)) };
   });
 
-  const addPayment = async () => {
-    if (!pf.payee || !Number(pf.amount)) return;
-    await savePayments([{ id: uid(), payeeType: pf.type, payee: pf.payee, company: pf.type === "company" ? pf.payee : companyOf(pf.payee) || "", amount: Number(pf.amount), date: pf.date, note: pf.note.trim(), recordedBy: adminName, recordedAt: new Date().toISOString() }, ...payments]);
-    setPf({ type: pf.type, payee: "", amount: "", date: new Date().toISOString().slice(0, 10), note: "" });
-  };
-  const removePayment = async (id) => savePayments(payments.filter((p) => p.id !== id));
-
   /* ---- exports ---- */
   const earningsRows = () => [
     ...iRows.map((r) => ({ "Type": "Instructor", "Payee": r.payee, "Company": r.company, "Students": r.students, "Revenue": r.revenue.toFixed(2), "Commission": r.commission.toFixed(2), "Payments Made": r.paid.toFixed(2), "Balance Due": r.balance.toFixed(2) })),
     ...cRows.map((r) => ({ "Type": "Company", "Payee": r.payee, "Company": "", "Students": r.students, "Revenue": r.revenue.toFixed(2), "Commission": r.commission.toFixed(2), "Payments Made": r.paid.toFixed(2), "Balance Due": r.balance.toFixed(2) })),
   ];
   const rateRows = () => studentRows.map((r) => ({ "Class": r.classId, "Date": r.date, "Instructor": r.instructor, "Company": r.company, "Student": r.student, "Ref": r.ref, "Paid": r.paid.toFixed(2), "Instructor %": r.iRate, "Company %": r.cRate, "Instructor Commission": r.iCom.toFixed(2), "Company Commission": r.cCom.toFixed(2), "Custom Rates": r.overridden ? "Yes" : "" }));
-  const paymentRows = () => payments.map((p) => ({ "Date": p.date, "Payee": p.payee, "Type": (p.payeeType || "instructor") === "company" ? "Company" : "Instructor", "Amount": Number(p.amount).toFixed(2), "Note": p.note || "", "Recorded By": p.recordedBy || "" }));
+  const paymentRows = () => payments.map((p) => ({ "Date": p.date, "Payee": p.payee, "Type": (p.payeeType || "instructor") === "company" ? "Company" : "Instructor", "Check / EFT": p.checkRef || "", "Amount": Number(p.amount).toFixed(2), "Students Covered": p.items ? p.items.length : "", "Note": p.note || "", "Recorded By": p.recordedBy || "" }));
   const dailyExportRows = () => daily.flatMap((d) => [
-    ...d.rows.map((p) => ({ "Date": p.date, "Payee": p.payee, "Type": (p.payeeType || "instructor") === "company" ? "Company" : "Instructor", "Amount": Number(p.amount).toFixed(2), "Note": p.note || "", "Recorded By": p.recordedBy || "" })),
-    { "Date": d.date, "Payee": "— DAY TOTAL —", "Type": "", "Amount": d.total.toFixed(2), "Note": "", "Recorded By": "" },
+    ...d.rows.map((p) => ({ "Date": p.date, "Payee": p.payee, "Type": (p.payeeType || "instructor") === "company" ? "Company" : "Instructor", "Check / EFT": p.checkRef || "", "Amount": Number(p.amount).toFixed(2), "Note": p.note || "", "Recorded By": p.recordedBy || "" })),
+    { "Date": d.date, "Payee": "— DAY TOTAL —", "Type": "", "Check / EFT": "", "Amount": d.total.toFixed(2), "Note": "", "Recorded By": "" },
   ]);
 
   const selStyle = { padding: "9px 12px", border: `1px solid ${C.line}`, fontSize: 14, ...body, background: C.panel2, color: C.text, minWidth: 150 };
@@ -3682,14 +3780,14 @@ function AdminCommissions({ classes, accounts, payments, savePayments, saveClass
   const td = { padding: "8px 10px", borderBottom: `1px solid ${C.panel2}` };
   const tdm = { ...td, ...mono, fontSize: 12 };
 
-  const EarningsTable = ({ title, rows, rateLabel, totals }) => (
+  const EarningsTable = ({ title, rows, totals }) => (
     <div>
       <div style={{ ...display, fontWeight: 700, fontSize: 18, textTransform: "uppercase", color: C.bronzeLight, marginBottom: 8 }}>{title}</div>
       {rows.length === 0 ? <p style={{ color: C.muted, fontSize: 14 }}>Nothing to tally yet.</p> : (
         <div className="gs-table-wrap">
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, background: C.panel, border: `1px solid ${C.line}`, minWidth: 760 }}>
             <thead><tr style={{ background: C.panel2 }}>
-              {["PAYEE", ...(title.includes("Instructor") ? ["COMPANY"] : []), "STUDENTS", "REVENUE", rateLabel, "PAID", "BALANCE DUE"].map((h) => <th key={h} style={th}>{h}</th>)}
+              {["PAYEE", ...(title.includes("Instructor") ? ["COMPANY"] : []), "STUDENTS", "REVENUE", "COMMISSION", "PAID", "BALANCE DUE", ""].map((h, i) => <th key={i} style={th}>{h}</th>)}
             </tr></thead>
             <tbody>
               {rows.map((r) => (
@@ -3701,6 +3799,9 @@ function AdminCommissions({ classes, accounts, payments, savePayments, saveClass
                   <td style={{ ...tdm, color: C.bronzeLight }}>{money(r.commission)}</td>
                   <td style={tdm}>{money(r.paid)}</td>
                   <td style={{ ...tdm, color: r.balance > 0 ? C.warn : C.ok, fontWeight: 600 }}>{money(r.balance)}</td>
+                  <td style={td}>
+                    <button onClick={() => { pickPayee(title.includes("Instructor") ? "instructor" : "company", r.payee); }} style={smallBtn}>Pay →</button>
+                  </td>
                 </tr>
               ))}
               <tr style={{ background: C.panel2 }}>
@@ -3708,7 +3809,7 @@ function AdminCommissions({ classes, accounts, payments, savePayments, saveClass
                 <td style={{ ...tdm, color: C.bronzeLight }}>{money(totals.revenue)}</td>
                 <td style={{ ...tdm, color: C.bronzeLight }}>{money(totals.commission)}</td>
                 <td style={{ ...tdm, color: C.bronzeLight }}>{money(totals.paid)}</td>
-                <td style={{ ...tdm, color: totals.balance > 0 ? C.warn : C.ok }}>{money(totals.balance)}</td>
+                <td colSpan={2} style={{ ...tdm, color: totals.balance > 0 ? C.warn : C.ok }}>{money(totals.balance)}</td>
               </tr>
             </tbody>
           </table>
@@ -3719,6 +3820,7 @@ function AdminCommissions({ classes, accounts, payments, savePayments, saveClass
 
   return (
     <div style={{ display: "grid", gap: 28 }}>
+      {statement && <PaymentStatementModal payment={statement} onClose={() => setStatement(null)} />}
       {printOpen && (
         <AdminPrintModal title="Commission Report" subtitle={`INSTRUCTOR ${instrRateDefault}% · COMPANY ${companyRateDefault}% (DEFAULTS — PER-STUDENT RATES APPLY)`}
           columns={[["Type","TYPE"],["Payee","PAYEE"],["Company","COMPANY"],["Students","STUDENTS"],["Revenue","REVENUE"],["Commission","COMMISSION"],["Payments Made","PAID"],["Balance Due","BALANCE DUE"]]}
@@ -3728,7 +3830,7 @@ function AdminCommissions({ classes, accounts, payments, savePayments, saveClass
       )}
       {dailyPrintOpen && (
         <AdminPrintModal title="Daily Commission Payments" subtitle={`${payments.length} PAYMENTS ACROSS ${daily.length} DAY${daily.length === 1 ? "" : "S"}`}
-          columns={[["Date","DATE"],["Payee","PAYEE"],["Type","TYPE"],["Amount","AMOUNT"],["Note","NOTE"],["Recorded By","RECORDED BY"]]}
+          columns={[["Date","DATE"],["Payee","PAYEE"],["Type","TYPE"],["Check / EFT","CHECK / EFT"],["Amount","AMOUNT"],["Note","NOTE"],["Recorded By","RECORDED BY"]]}
           rows={dailyExportRows().map((r) => ({ ...r, Amount: "$" + r.Amount }))}
           footerNote={`Total payments recorded: ${money(payments.reduce((s, p) => s + Number(p.amount || 0), 0))}.`}
           onClose={() => setDailyPrintOpen(false)} />
@@ -3752,8 +3854,65 @@ function AdminCommissions({ classes, accounts, payments, savePayments, saveClass
         </div>
       </div>
 
-      <EarningsTable title="Instructor commissions" rows={iRows} rateLabel="COMMISSION" totals={iTot} />
-      <EarningsTable title="Company commissions" rows={cRows} rateLabel="COMMISSION" totals={cTot} />
+      <EarningsTable title="Instructor commissions" rows={iRows} totals={iTot} />
+      <EarningsTable title="Company commissions" rows={cRows} totals={cTot} />
+
+      {/* payout builder */}
+      <div style={{ background: C.panel, border: `1px solid ${C.bronzeDark}`, padding: "18px 20px", display: "grid", gap: 14 }}>
+        <div style={{ ...display, fontWeight: 700, fontSize: 18, textTransform: "uppercase", color: C.bronzeLight }}>Create a commission payment</div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+          <div>
+            <FieldLabel>Pay to</FieldLabel>
+            <select value={pb.type} onChange={(e) => pickPayee(e.target.value, "")} style={selStyle}>
+              <option value="instructor">Instructor</option>
+              <option value="company">Company</option>
+            </select>
+          </div>
+          <div>
+            <FieldLabel>Payee</FieldLabel>
+            <select value={pb.payee} onChange={(e) => pickPayee(pb.type, e.target.value)} style={selStyle}>
+              <option value="">Select…</option>
+              {(pb.type === "company" ? cRows : iRows).map((r) => <option key={r.payee} value={r.payee}>{r.payee}</option>)}
+            </select>
+          </div>
+          <div><FieldLabel>Check # or EFT record</FieldLabel><input value={pb.checkRef} onChange={(e) => setPb({ ...pb, checkRef: e.target.value })} placeholder="e.g. Check #1042 / EFT-83921" style={{ ...selStyle, minWidth: 190 }} /></div>
+          <div><FieldLabel>Payment date</FieldLabel><input type="date" value={pb.date} onChange={(e) => setPb({ ...pb, date: e.target.value })} style={{ ...selStyle, colorScheme: "dark" }} /></div>
+          <div style={{ flex: 1, minWidth: 150 }}><FieldLabel>Note (optional)</FieldLabel><input value={pb.note} onChange={(e) => setPb({ ...pb, note: e.target.value })} style={{ ...selStyle, width: "100%", boxSizing: "border-box" }} /></div>
+        </div>
+
+        {pb.payee && (unpaidItems.length === 0 ? (
+          <p style={{ color: C.ok, ...mono, fontSize: 13, margin: 0 }}>✓ All student commissions for this payee are settled.</p>
+        ) : (
+          <>
+            <div className="gs-table-wrap">
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, background: C.panel2, minWidth: 720 }}>
+                <thead><tr>
+                  {["PAY", "CLASS DATE", "CLASS", "STUDENT", "STUDENT PAID", "RATE", "COMMISSION"].map((h) => <th key={h} style={th}>{h}</th>)}
+                </tr></thead>
+                <tbody>
+                  {unpaidItems.map((i) => (
+                    <tr key={i.ref}>
+                      <td style={td}><input type="checkbox" checked={!!sel[i.ref]} onChange={(e) => setSel({ ...sel, [i.ref]: e.target.checked })} style={{ accentColor: C.bronze }} /></td>
+                      <td style={tdm}>{i.date}</td>
+                      <td style={tdm}>{i.classId}</td>
+                      <td style={{ ...td, fontWeight: 600 }}>{i.student}</td>
+                      <td style={tdm}>{money(i.paid)}</td>
+                      <td style={tdm}>{i.rate}%</td>
+                      <td style={{ ...tdm, color: C.bronzeLight }}>{money(i.commission)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {pbErr && <div style={{ ...mono, fontSize: 12, color: C.warn }}>{pbErr}</div>}
+            <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+              <span style={{ ...mono, fontSize: 14, color: C.bronzeLight }}>PAYMENT TOTAL: <strong>{money(chosenTotal)}</strong> ({chosen.length} of {unpaidItems.length} commissions)</span>
+              <Btn small onClick={recordPayout} disabled={chosen.length === 0}>Record payment & create statement</Btn>
+            </div>
+          </>
+        ))}
+        {!pb.payee && <p style={{ color: C.muted, fontSize: 13, margin: 0 }}>Choose a payee (or click "Pay →" in the tables above) to see their unpaid student commissions.</p>}
+      </div>
 
       {/* per-student rates */}
       <div>
@@ -3802,31 +3961,6 @@ function AdminCommissions({ classes, accounts, payments, savePayments, saveClass
         )}
       </div>
 
-      {/* record a payment */}
-      <div style={{ background: C.panel, border: `1px solid ${C.line}`, padding: "18px 20px", display: "grid", gap: 12 }}>
-        <div style={{ ...display, fontWeight: 700, fontSize: 18, textTransform: "uppercase", color: C.bronzeLight }}>Record a payment</div>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
-          <div>
-            <FieldLabel>Pay to</FieldLabel>
-            <select value={pf.type} onChange={(e) => setPf({ ...pf, type: e.target.value, payee: "" })} style={selStyle}>
-              <option value="instructor">Instructor</option>
-              <option value="company">Company</option>
-            </select>
-          </div>
-          <div>
-            <FieldLabel>Payee</FieldLabel>
-            <select value={pf.payee} onChange={(e) => setPf({ ...pf, payee: e.target.value })} style={selStyle}>
-              <option value="">Select…</option>
-              {(pf.type === "company" ? cRows : iRows).map((r) => <option key={r.payee} value={r.payee}>{r.payee}</option>)}
-            </select>
-          </div>
-          <div><FieldLabel>Amount ($)</FieldLabel><input type="number" value={pf.amount} onChange={(e) => setPf({ ...pf, amount: e.target.value })} style={{ ...selStyle, width: 110 }} /></div>
-          <div><FieldLabel>Date</FieldLabel><input type="date" value={pf.date} onChange={(e) => setPf({ ...pf, date: e.target.value })} style={{ ...selStyle, colorScheme: "dark" }} /></div>
-          <div style={{ flex: 1, minWidth: 160 }}><FieldLabel>Note (optional)</FieldLabel><input value={pf.note} onChange={(e) => setPf({ ...pf, note: e.target.value })} placeholder="e.g. July payout — check #1042" style={{ ...selStyle, width: "100%", boxSizing: "border-box" }} /></div>
-          <Btn small onClick={addPayment} disabled={!pf.payee || !Number(pf.amount)}>Record payment</Btn>
-        </div>
-      </div>
-
       {/* daily payment report */}
       <div>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
@@ -3852,9 +3986,11 @@ function AdminCommissions({ classes, accounts, payments, savePayments, saveClass
                     <span style={{ ...mono, fontSize: 10, letterSpacing: "0.1em", background: (p.payeeType || "instructor") === "company" ? "#2C3138" : "#2E2718", color: (p.payeeType || "instructor") === "company" ? C.steel : C.bronze, padding: "2px 7px", borderRadius: 2 }}>
                       {(p.payeeType || "instructor") === "company" ? "COMPANY" : "INSTRUCTOR"}
                     </span>
+                    {p.checkRef && <span style={{ color: C.bronzeLight }}>{p.checkRef}</span>}
+                    {p.items && <span style={{ color: C.muted }}>{p.items.length} commission{p.items.length === 1 ? "" : "s"}</span>}
                     {p.note && <span style={{ color: C.muted }}>{p.note}</span>}
-                    <span style={{ color: C.muted }}>by {p.recordedBy || "—"}</span>
                     <span style={{ marginLeft: "auto", color: C.ok, fontSize: 14 }}>{money(p.amount)}</span>
+                    {p.items && <button onClick={() => setStatement(p)} style={smallBtn}>Statement</button>}
                     <button onClick={() => removePayment(p.id)} style={{ ...smallBtn, color: C.warn, border: `1px solid ${C.line}` }}>Delete</button>
                   </div>
                 ))}
