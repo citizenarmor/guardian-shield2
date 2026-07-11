@@ -1050,6 +1050,7 @@ function applyClassFilters(list, f) {
   if (f.instructor !== "all") out = out.filter((c) => c.instructor === f.instructor);
   if (f.city && f.city !== "all") out = out.filter((c) => (c.city || "") === f.city);
   if (f.state && f.state !== "all") out = out.filter((c) => (c.state || "") === f.state);
+  if (f.company && f.company !== "all") out = out.filter((c) => (c.company || "") === f.company);
   const key = f.sortBy;
   out = [...out].sort((a, b) => {
     const va = String(a[key] || "").toLowerCase();
@@ -1064,8 +1065,9 @@ function ClassFilters({ classes, filters, setFilters }) {
   const instructors = [...new Set(classes.map((c) => c.instructor))].sort();
   const cities = [...new Set(classes.map((c) => c.city).filter(Boolean))].sort();
   const states = [...new Set(classes.map((c) => c.state).filter(Boolean))].sort();
+  const companies = [...new Set(classes.map((c) => c.company).filter(Boolean))].sort();
   const selStyle = { padding: "9px 12px", border: `1px solid ${C.line}`, fontSize: 14, ...body, background: C.panel2, color: C.text, minWidth: 140, maxWidth: "100%" };
-  const isFiltered = filters.location !== "all" || filters.instructor !== "all" || filters.city !== "all" || filters.state !== "all";
+  const isFiltered = filters.location !== "all" || filters.instructor !== "all" || filters.city !== "all" || filters.state !== "all" || (filters.company || "all") !== "all";
   return (
     <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", background: C.panel, border: `1px solid ${C.line}`, padding: "14px 16px", marginBottom: 18 }}>
       <div>
@@ -1089,6 +1091,15 @@ function ClassFilters({ classes, filters, setFilters }) {
           {states.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
       </div>
+      {companies.length > 0 && (
+        <div>
+          <FieldLabel>Company</FieldLabel>
+          <select value={filters.company || "all"} onChange={(e) => setFilters({ ...filters, company: e.target.value })} style={selStyle}>
+            <option value="all">All companies</option>
+            {companies.map((co) => <option key={co} value={co}>{co}</option>)}
+          </select>
+        </div>
+      )}
       <div>
         <FieldLabel>Instructor</FieldLabel>
         <select value={filters.instructor} onChange={(e) => setFilters({ ...filters, instructor: e.target.value })} style={selStyle}>
@@ -1103,11 +1114,12 @@ function ClassFilters({ classes, filters, setFilters }) {
           <option value="location">Location (A–Z)</option>
           <option value="city">City (A–Z)</option>
           <option value="state">State (A–Z)</option>
+          <option value="company">Company (A–Z)</option>
           <option value="instructor">Instructor (A–Z)</option>
         </select>
       </div>
       {isFiltered && (
-        <button onClick={() => setFilters({ location: "all", instructor: "all", city: "all", state: "all", sortBy: filters.sortBy })}
+        <button onClick={() => setFilters({ location: "all", instructor: "all", city: "all", state: "all", company: "all", sortBy: filters.sortBy })}
           style={{ ...mono, fontSize: 12, background: "none", border: `1px solid ${C.bronzeDark}`, color: C.bronze, padding: "9px 12px", cursor: "pointer", borderRadius: 2 }}>
           Clear filters
         </button>
@@ -1128,7 +1140,7 @@ function Schedule({ classes, onRegister, codes, redeemCode, requests, updateRequ
   const [done, setDone] = useState(null);
   const [requesting, setRequesting] = useState(false);
   const [requestSent, setRequestSent] = useState(false);
-  const [filters, setFilters] = useState({ location: "all", instructor: "all", city: "all", state: "all", sortBy: "date" });
+  const [filters, setFilters] = useState({ location: "all", instructor: "all", city: "all", state: "all", company: "all", sortBy: "date" });
   const open = classes.filter((c) => !c.completed && !c.cancelled);
   const upcoming = applyClassFilters(open, filters);
 
@@ -2027,7 +2039,7 @@ function Portal({ user, setUser, reloadData, accounts, updateAccounts, classes, 
       </div>
       <div style={{ marginTop: 24 }}>
         {tab === "classes" && <PortalClasses classes={classes} updateClasses={updateClasses} certs={certs} updateCerts={updateCerts} />}
-        {tab === "create" && <PortalCreate classes={classes} updateClasses={updateClasses} onCreated={() => setTab("classes")} instructorName={instrName} />}
+        {tab === "create" && <PortalCreate classes={classes} updateClasses={updateClasses} onCreated={() => setTab("classes")} instructorName={instrName} instructorCompany={user.company || ""} />}
         {tab === "notify" && <PortalNotices notices={notices} updateNotices={updateNotices} />}
         {tab === "grads" && <PortalGrads certs={certs} />}
         {tab === "apps" && <PortalApps apps={apps} updateApps={updateApps} />}
@@ -2039,7 +2051,7 @@ function Portal({ user, setUser, reloadData, accounts, updateAccounts, classes, 
 }
 
 function PortalClasses({ classes, updateClasses, certs, updateCerts }) {
-  const [filters, setFilters] = useState({ location: "all", instructor: "all", city: "all", state: "all", sortBy: "date" });
+  const [filters, setFilters] = useState({ location: "all", instructor: "all", city: "all", state: "all", company: "all", sortBy: "date" });
   const sorted = applyClassFilters(classes, filters);
 
   // ---- editing / cancelling ----
@@ -2052,7 +2064,7 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts }) {
 
   const startEdit = (c) => {
     setEditingId(c.id);
-    setEf({ date: c.date, time: c.time, location: c.location, city: c.city || "", state: c.state || "", seats: c.seats, price: c.price, type: c.type, instructor: c.instructor });
+    setEf({ date: c.date, time: c.time, location: c.location, city: c.city || "", state: c.state || "", company: c.company || "", seats: c.seats, price: c.price, type: c.type, instructor: c.instructor });
     setEditErr(null);
     setConfirmCancelId(null);
   };
@@ -2069,7 +2081,7 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts }) {
     if (price < 0 || Number.isNaN(price)) return setEditErr("Enter a valid price.");
     await updateClasses(classes.map((c) =>
       c.id === editingId
-        ? { ...c, date: ef.date, time: ef.time, location: ef.location.trim(), city: (ef.city || "").trim(), state: ef.state || "", seats, price, type: ef.type, instructor: ef.instructor.trim() }
+        ? { ...c, date: ef.date, time: ef.time, location: ef.location.trim(), city: (ef.city || "").trim(), state: ef.state || "", company: (ef.company || "").trim(), seats, price, type: ef.type, instructor: ef.instructor.trim() }
         : c
     ));
     cancelEdit();
@@ -2117,7 +2129,7 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts }) {
             {c.completed && <span style={{ ...mono, fontSize: 12, color: C.ok }}>✓ COMPLETED — CERTS ISSUED</span>}
             {c.cancelled && <span style={{ ...mono, fontSize: 12, color: C.warn }}>✕ CANCELLED — HIDDEN FROM SCHEDULE</span>}
           </div>
-          <div style={{ color: C.muted, fontSize: 14, marginTop: 4 }}>{classPlace(c)} · ${c.price} · {enrolledN(c)}/{c.seats} enrolled</div>
+          <div style={{ color: C.muted, fontSize: 14, marginTop: 4 }}>{classPlace(c)}{c.company ? ` · ${c.company}` : ""} · ${c.price} · {enrolledN(c)}/{c.seats} enrolled</div>
 
           {/* inline edit form */}
           {editingId === c.id && (
@@ -2135,6 +2147,10 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts }) {
               <div>
                 <FieldLabel>Location / facility</FieldLabel>
                 <input value={ef.location} onChange={eset("location")} style={inputStyle} />
+              </div>
+              <div>
+                <FieldLabel>Company (optional)</FieldLabel>
+                <input value={ef.company} onChange={eset("company")} style={inputStyle} />
               </div>
               <div className="gs-row-2">
                 <div>
@@ -2251,13 +2267,13 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts }) {
   );
 }
 
-function PortalCreate({ classes, updateClasses, onCreated, instructorName }) {
-  const [f, setF] = useState({ date: "", time: "8:00 AM", location: "", city: "", state: "", seats: 12, price: 495, type: "standard", instructor: instructorName || "" });
+function PortalCreate({ classes, updateClasses, onCreated, instructorName, instructorCompany }) {
+  const [f, setF] = useState({ date: "", time: "8:00 AM", location: "", city: "", state: "", seats: 12, price: 495, type: "standard", instructor: instructorName || "", company: instructorCompany || "" });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const valid = f.date && f.location.trim() && f.city.trim() && f.state && f.instructor.trim() && Number(f.seats) > 0;
 
   const create = async () => {
-    const cls = { id: "GS-" + uid(), ...f, location: f.location.trim(), city: f.city.trim(), seats: Number(f.seats), price: Number(f.price), enrolled: [], completed: false };
+    const cls = { id: "GS-" + uid(), ...f, location: f.location.trim(), city: f.city.trim(), company: (f.company || "").trim(), seats: Number(f.seats), price: Number(f.price), enrolled: [], completed: false };
     await updateClasses([...classes, cls]);
     onCreated();
   };
@@ -2278,6 +2294,7 @@ function PortalCreate({ classes, updateClasses, onCreated, instructorName }) {
         <Field label="Start time" value={f.time} onChange={set("time")} />
       </div>
       <Field label="Location / facility" value={f.location} onChange={set("location")} placeholder="Range or training facility name" />
+      <Field label="Company (optional)" value={f.company} onChange={set("company")} placeholder="Hosting company" />
       <div className="gs-row-2">
         <Field label="City" value={f.city} onChange={set("city")} placeholder="e.g. Provo" />
         <div>
@@ -2964,8 +2981,9 @@ function RosterPrintModal({ cls, onClose }) {
             <thead>
               <tr style={{ textAlign: "left" }}>
                 <th style={{ ...mono, fontSize: 10, letterSpacing: "0.08em", color: bronze, padding: "6px 8px", borderBottom: `2px solid ${bronze}`, width: 30 }}>#</th>
-                <th style={{ ...mono, fontSize: 10, letterSpacing: "0.08em", color: bronze, padding: "6px 8px", borderBottom: `2px solid ${bronze}`, width: "26%" }}>STUDENT NAME</th>
-                <th style={{ ...mono, fontSize: 10, letterSpacing: "0.08em", color: bronze, padding: "6px 8px", borderBottom: `2px solid ${bronze}`, width: "26%" }}>CONTACT</th>
+                <th style={{ ...mono, fontSize: 10, letterSpacing: "0.08em", color: bronze, padding: "6px 8px", borderBottom: `2px solid ${bronze}`, width: "22%" }}>STUDENT NAME</th>
+                <th style={{ ...mono, fontSize: 10, letterSpacing: "0.08em", color: bronze, padding: "6px 8px", borderBottom: `2px solid ${bronze}`, width: "16%" }}>COMPANY</th>
+                <th style={{ ...mono, fontSize: 10, letterSpacing: "0.08em", color: bronze, padding: "6px 8px", borderBottom: `2px solid ${bronze}`, width: "24%" }}>CONTACT</th>
                 <th style={{ ...mono, fontSize: 10, letterSpacing: "0.08em", color: bronze, padding: "6px 8px", borderBottom: `2px solid ${bronze}` }}>STUDENT SIGNATURE (CHECK-IN)</th>
               </tr>
             </thead>
@@ -2974,6 +2992,7 @@ function RosterPrintModal({ cls, onClose }) {
                 <tr key={s.ref}>
                   <td style={{ ...sigRow, ...mono, fontSize: 11 }}>{i + 1}</td>
                   <td style={{ ...sigRow, fontWeight: 600 }}>{s.name}</td>
+                  <td style={{ ...sigRow, fontSize: 11, color: "#4A4130" }}>{s.company || "—"}</td>
                   <td style={{ ...sigRow, fontSize: 11, color: "#4A4130" }}>{s.email}{s.phone ? ` · ${s.phone}` : ""}</td>
                   <td style={{ ...sigRow }}><div style={{ borderBottom: `1px solid ${ink}`, height: 1, marginTop: 30 }} /></td>
                 </tr>
@@ -2981,6 +3000,7 @@ function RosterPrintModal({ cls, onClose }) {
               {blanks.map((b) => (
                 <tr key={"blank" + b}>
                   <td style={{ ...sigRow, ...mono, fontSize: 11, color: "#9A9078" }}>{enrolledN(cls) + b}</td>
+                  <td style={{ ...sigRow }}><div style={{ borderBottom: "1px solid #C9C0A6", height: 1, marginTop: 30 }} /></td>
                   <td style={{ ...sigRow }}><div style={{ borderBottom: "1px solid #C9C0A6", height: 1, marginTop: 30 }} /></td>
                   <td style={{ ...sigRow }}><div style={{ borderBottom: "1px solid #C9C0A6", height: 1, marginTop: 30 }} /></td>
                   <td style={{ ...sigRow }}><div style={{ borderBottom: "1px solid #C9C0A6", height: 1, marginTop: 30 }} /></td>
