@@ -120,6 +120,26 @@ function compressImageFile(file, maxDim = 900, quality = 0.72) {
 
 const phoneOk = (p) => String(p || "").replace(/\D/g, "").length >= 10;
 
+const readPdfFile = (file, cb, onErr) => {
+  if (!file) return;
+  if (file.type !== "application/pdf") return onErr("Please attach a PDF file.");
+  if (file.size > 3.5 * 1024 * 1024) return onErr("PDF must be under 3.5 MB. Scan at a lower resolution if needed.");
+  const reader = new FileReader();
+  reader.onload = () => cb({ name: file.name, dataUrl: reader.result });
+  reader.onerror = () => onErr("Couldn't read that file. Try again.");
+  reader.readAsDataURL(file);
+};
+const openPdfDataUrl = (dataUrl) => {
+  try {
+    const b64 = dataUrl.split(",")[1];
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+    window.open(url, "_blank");
+  } catch (e) { alert("Couldn't open that PDF."); }
+};
+
 function isDirectVideoFile(url) {
   return /\.(mp4|webm|ogv|mov|m4v)(\?|#|$)/i.test(String(url || "").trim());
 }
@@ -2187,8 +2207,10 @@ function Portal({ user, setUser, reloadData, accounts, updateAccounts, classes, 
 
   const instrName = user.name || "";
   const firstName = instrName.trim().split(/\s+/)[0] || "instructor";
+  const ownsClass = (c) => (c.createdBy ? c.createdBy.toLowerCase() === (user.email || "").toLowerCase() : c.instructor === instrName);
+  const ownClassIds = new Set(classes.filter(ownsClass).map((c) => c.id));
 
-  const unread = notices.filter((n) => !n.read).length;
+  const unread = notices.filter((n) => !n.read && n.classId && ownClassIds.has(n.classId)).length;
   const unreadApps = apps.filter((a) => !a.read).length;
   const unreadReqs = requests.filter((r) => !r.read).length;
   const tabs = [
@@ -2219,19 +2241,20 @@ function Portal({ user, setUser, reloadData, accounts, updateAccounts, classes, 
         ))}
       </div>
       <div style={{ marginTop: 24 }}>
-        {tab === "classes" && <PortalClasses classes={classes} updateClasses={updateClasses} certs={certs} updateCerts={updateCerts} />}
-        {tab === "create" && <PortalCreate classes={classes} updateClasses={updateClasses} onCreated={() => setTab("classes")} instructorName={instrName} instructorCompany={user.company || ""} />}
-        {tab === "notify" && <PortalNotices notices={notices} updateNotices={updateNotices} />}
-        {tab === "grads" && <PortalGrads certs={certs} />}
+        {tab === "classes" && <PortalClasses classes={classes} updateClasses={updateClasses} certs={certs} updateCerts={updateCerts} ownFilter={ownsClass} />}
+        {tab === "create" && <PortalCreate classes={classes} updateClasses={updateClasses} onCreated={() => setTab("classes")} instructorName={instrName} instructorCompany={user.company || ""} creatorEmail={user.email || ""} />}
+        {tab === "notify" && <PortalNotices notices={notices} updateNotices={updateNotices} ownClassIds={ownClassIds} />}
+        {tab === "grads" && <PortalGrads certs={certs} updateCerts={updateCerts} ownClassIds={ownClassIds} />}
         {tab === "agreement" && <PortalAgreement user={user} />}
       </div>
     </div>
   );
 }
 
-function PortalClasses({ classes, updateClasses, certs, updateCerts, isAdmin = false }) {
+function PortalClasses({ classes, updateClasses, certs, updateCerts, isAdmin = false, ownFilter = null }) {
+  const visible = ownFilter ? classes.filter(ownFilter) : classes;
   const [filters, setFilters] = useState({ location: "all", instructor: "all", city: "all", state: "all", company: "all", sortBy: "date" });
-  const sorted = applyClassFilters(classes, filters);
+  const sorted = applyClassFilters(visible, filters);
 
   // ---- editing / cancelling ----
   const [editingId, setEditingId] = useState(null);
@@ -2279,6 +2302,24 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts, isAdmin = f
     setConfirmDeleteId(null); setConfirmCancelId(null); setEditingId(null);
   };
 
+  /* ---- scanned signed roster (PDF) per class ---- */
+  const [scanErr, setScanErr] = useState(null);
+  const uploadRosterScan = (cls) => (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    setScanErr(null);
+    readPdfFile(file, async ({ name, dataUrl }) => {
+      const at = new Date().toISOString();
+      await saveKey(`gs:doc:roster:${cls.id}`, { name, dataUrl, uploadedAt: at });
+      await updateClasses(classes.map((c) => (c.id === cls.id ? { ...c, rosterScan: { name, at } } : c)));
+    }, (msg) => setScanErr({ id: cls.id, msg }));
+  };
+  const viewRosterScan = async (cls) => {
+    const doc = await loadKey(`gs:doc:roster:${cls.id}`, null);
+    if (!doc || !doc.dataUrl) return setScanErr({ id: cls.id, msg: "Scanned roster file not found." });
+    openPdfDataUrl(doc.dataUrl);
+  };
+
   const graduate = async (cls) => {
     if (enrolledN(cls) === 0) return;
     const issued = new Date();
@@ -2301,9 +2342,9 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts, isAdmin = f
     <div style={{ display: "grid", gap: 14 }}>
       {rosterFor && <RosterPrintModal cls={rosterFor} onClose={() => setRosterFor(null)} />}
       {waiverView && <WaiverViewModal token={waiverView.token} studentName={waiverView.name} onClose={() => setWaiverView(null)} />}
-      {classes.length > 0 && <ClassFilters classes={classes} filters={filters} setFilters={setFilters} />}
-      {classes.length === 0 && <p style={{ color: C.muted }}>No classes yet. Create your first class to open registration.</p>}
-      {classes.length > 0 && sorted.length === 0 && <p style={{ color: C.muted }}>No classes match those filters.</p>}
+      {visible.length > 0 && <ClassFilters classes={visible} filters={filters} setFilters={setFilters} />}
+      {visible.length === 0 && <p style={{ color: C.muted }}>No classes yet. Create your first class to open registration.</p>}
+      {visible.length > 0 && sorted.length === 0 && <p style={{ color: C.muted }}>No classes match those filters.</p>}
       {sorted.map((c) => (
         <div key={c.id} style={{ background: C.panel, border: `1px solid ${C.line}`, padding: "18px 20px", opacity: c.cancelled ? 0.75 : 1 }}>
           <div style={{ display: "flex", gap: 16, alignItems: "baseline", flexWrap: "wrap" }}>
@@ -2458,6 +2499,21 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts, isAdmin = f
               {!c.completed && !c.cancelled && enrolledN(c) > 0 && (
                 <Btn small onClick={() => graduate(c)}>Mark class complete & issue certifications</Btn>
               )}
+              {c.rosterScan ? (
+                <>
+                  <button onClick={() => viewRosterScan(c)} style={btnStyle}>📄 View signed roster</button>
+                  <label style={{ ...btnStyle, display: "inline-block" }}>
+                    Replace signed roster
+                    <input type="file" accept="application/pdf" onChange={uploadRosterScan(c)} style={{ display: "none" }} />
+                  </label>
+                </>
+              ) : (
+                <label style={{ ...btnStyle, display: "inline-block" }}>
+                  Upload signed roster (PDF)
+                  <input type="file" accept="application/pdf" onChange={uploadRosterScan(c)} style={{ display: "none" }} />
+                </label>
+              )}
+              {scanErr && scanErr.id === c.id && <span style={{ ...mono, fontSize: 12, color: C.warn }}>{scanErr.msg}</span>}
               {isAdmin && (confirmDeleteId === c.id ? (
                 <>
                   <button onClick={() => deleteClass(c.id)} style={{ ...btnStyle, background: C.warn, color: "#14120D", border: `1px solid ${C.warn}`, fontWeight: 700 }}>Confirm delete class</button>
@@ -2476,13 +2532,13 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts, isAdmin = f
   );
 }
 
-function PortalCreate({ classes, updateClasses, onCreated, instructorName, instructorCompany }) {
+function PortalCreate({ classes, updateClasses, onCreated, instructorName, instructorCompany, creatorEmail = "" }) {
   const [f, setF] = useState({ date: "", time: "8:00 AM", location: "", city: "", state: "", seats: 12, price: 495, type: "standard", instructor: instructorName || "", company: instructorCompany || "" });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const valid = f.date && f.location.trim() && f.city.trim() && f.state && f.instructor.trim() && Number(f.seats) > 0;
 
   const create = async () => {
-    const cls = { id: "GS-" + uid(), ...f, location: f.location.trim(), city: f.city.trim(), company: (f.company || "").trim(), seats: Number(f.seats), price: Number(f.price), enrolled: [], completed: false };
+    const cls = { id: "GS-" + uid(), ...f, location: f.location.trim(), city: f.city.trim(), company: (f.company || "").trim(), seats: Number(f.seats), price: Number(f.price), enrolled: [], completed: false, createdBy: creatorEmail || undefined };
     await updateClasses([...classes, cls]);
     onCreated();
   };
@@ -2525,18 +2581,20 @@ function PortalCreate({ classes, updateClasses, onCreated, instructorName, instr
   );
 }
 
-function PortalNotices({ notices, updateNotices }) {
-  const markAll = async () => updateNotices(notices.map((n) => ({ ...n, read: true })));
+function PortalNotices({ notices, updateNotices, ownClassIds = null }) {
+  const visible = ownClassIds ? notices.filter((n) => n.classId && ownClassIds.has(n.classId)) : notices;
+  const visIds = new Set(visible.map((n) => n.id));
+  const markAll = async () => updateNotices(notices.map((n) => (visIds.has(n.id) ? { ...n, read: true } : n)));
   const removeNotice = async (id) => updateNotices(notices.filter((n) => n.id !== id));
   return (
     <div>
-      {notices.length === 0 ? (
+      {visible.length === 0 ? (
         <p style={{ color: C.muted }}>No notifications yet. When a student registers for one of your classes, it appears here (and, in production, arrives by email).</p>
       ) : (
         <>
           <div style={{ marginBottom: 12 }}><Btn small ghost onClick={markAll}>Mark all read</Btn></div>
           <div style={{ display: "grid", gap: 10 }}>
-            {notices.map((n) => (
+            {visible.map((n) => (
               <div key={n.id} style={{ background: n.read ? C.panel : "#2A2415", border: `1px solid ${C.line}`, borderLeft: `4px solid ${n.read ? C.line : C.bronze}`, padding: "12px 16px", display: "flex", gap: 12, alignItems: "flex-start" }}>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 14, lineHeight: 1.5 }}>{n.text}</div>
@@ -2555,12 +2613,40 @@ function PortalNotices({ notices, updateNotices }) {
   );
 }
 
-function PortalGrads({ certs }) {
+function PortalGrads({ certs, updateCerts = null, ownClassIds = null }) {
   const [printing, setPrinting] = useState(null);
   const [printingList, setPrintingList] = useState(false);
   const [sort, setSort] = useState({ key: "issued", dir: "desc" });
+  const [formsErr, setFormsErr] = useState(null);
 
-  const rows = certs.map((c) => ({
+  const scoped = ownClassIds ? certs.filter((c) => ownClassIds.has(c.classId)) : certs;
+
+  /* ---- scanned signed pre-class forms (PDF) per graduate ---- */
+  const uploadForms = (cert) => (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    setFormsErr(null);
+    readPdfFile(file, async ({ name, dataUrl }) => {
+      const scanId = uid();
+      const at = new Date().toISOString();
+      await saveKey(`gs:doc:certforms:${cert.certId}:${scanId}`, { name, dataUrl, uploadedAt: at });
+      await updateCerts(certs.map((c) => (c.certId === cert.certId
+        ? { ...c, formScans: [...(c.formScans || []), { id: scanId, name, at }] }
+        : c)));
+    }, (msg) => setFormsErr({ id: cert.certId, msg }));
+  };
+  const viewFormScan = async (cert, scan) => {
+    const doc = await loadKey(`gs:doc:certforms:${cert.certId}:${scan.id}`, null);
+    if (!doc || !doc.dataUrl) return setFormsErr({ id: cert.certId, msg: "Scanned file not found." });
+    openPdfDataUrl(doc.dataUrl);
+  };
+  const removeFormScan = async (cert, scan) => {
+    await updateCerts(certs.map((c) => (c.certId === cert.certId
+      ? { ...c, formScans: (c.formScans || []).filter((s) => s.id !== scan.id) }
+      : c)));
+  };
+
+  const rows = scoped.map((c) => ({
     ...c,
     phone: c.phone || "",
     typeLabel: c.type === "instructor" ? "Instructor" : "Graduate",
@@ -2586,6 +2672,7 @@ function PortalGrads({ certs }) {
     ["issued", "CERTIFIED"],
     ["expires", "EXPIRES"],
     ["status", "STATUS"],
+    ["formScans", "SIGNED FORMS"],
   ];
 
   const exportRows = () =>
@@ -2669,6 +2756,24 @@ function PortalGrads({ certs }) {
                     <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.panel2}` }}>{c.typeLabel}</td>
                     <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 13 }}>{c.issued}</td>
                     <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 13 }}>{c.expires}</td>
+                    <td data-forms-cell style={{ padding: "10px 12px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12 }}>
+                      <div style={{ display: "grid", gap: 4, minWidth: 150 }}>
+                        {(c.formScans || []).map((s) => (
+                          <div key={s.id} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                            <button onClick={() => viewFormScan(c, s)} style={{ background: "none", border: "none", color: C.ok, cursor: "pointer", fontFamily: "inherit", fontSize: 12, padding: 0, textDecoration: "underline", textAlign: "left" }}>📄 {s.name.length > 22 ? s.name.slice(0, 20) + "…" : s.name}</button>
+                            {updateCerts && <button onClick={() => removeFormScan(c, s)} title="Remove" style={{ background: "none", border: "none", color: C.warn, cursor: "pointer", fontSize: 12, padding: 0 }}>✕</button>}
+                          </div>
+                        ))}
+                        {updateCerts && (
+                          <label style={{ ...mono, fontSize: 11, background: "none", border: `1px solid ${C.bronzeDark}`, color: C.bronze, padding: "3px 8px", cursor: "pointer", borderRadius: 2, justifySelf: "start" }}>
+                            {(c.formScans || []).length ? "+ Add PDF" : "Attach signed forms (PDF)"}
+                            <input type="file" accept="application/pdf" onChange={uploadForms(c)} style={{ display: "none" }} />
+                          </label>
+                        )}
+                        {!updateCerts && !(c.formScans || []).length && <span style={{ color: C.muted }}>—</span>}
+                        {formsErr && formsErr.id === c.certId && <span style={{ color: C.warn }}>{formsErr.msg}</span>}
+                      </div>
+                    </td>
                     <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.panel2}`, fontWeight: 600, color: c.status === "Expired" ? C.warn : C.ok }}>{c.status}</td>
                     <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.panel2}` }}>
                       <button onClick={() => setPrinting(c)} style={{ ...mono, fontSize: 12, background: "none", border: `1px solid ${C.bronzeDark}`, color: C.bronze, padding: "5px 10px", cursor: "pointer", borderRadius: 2, whiteSpace: "nowrap" }}>
