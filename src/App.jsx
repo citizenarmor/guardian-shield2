@@ -1828,6 +1828,17 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
   // password reset
   const [rs, setRs] = useState({ email: "", pw: "", pw2: "" });
   const [resetDone, setResetDone] = useState(false);
+  const [rec, setRec] = useState({ email: "", password: "", key: "" });
+  const [recResult, setRecResult] = useState(null);
+
+  const runRecovery = async () => {
+    setErr(null); setBusy(true);
+    try {
+      const r = await apiPost("auth/recover-2fa", { email: rec.email, password: rec.password, recoveryKey: rec.key });
+      setRecResult({ email: r.email, secret: r.totpSecret });
+    } catch (e) { setErr(e.local ? "Recovery requires the live site." : e.message); }
+    setBusy(false);
+  };
 
   const findAccount = (email) => accounts.find((a) => a.email.toLowerCase() === email.trim().toLowerCase());
 
@@ -1994,6 +2005,9 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
             <button onClick={() => { setMode("reset-start"); setErr(null); setResetDone(false); setRs({ email: si.email, pw: "", pw2: "" }); }} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 13, padding: 0, textAlign: "left" }}>
               Forgot password?
             </button>
+            <button onClick={() => { setMode("recover-2fa"); setErr(null); setRecResult(null); setRec({ email: si.email, password: "", key: "" }); }} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 13, padding: 0, textAlign: "left" }}>
+              Authenticator code not working?
+            </button>
             <button onClick={() => { setMode("signup"); setErr(null); }} style={{ background: "none", border: "none", color: C.bronze, cursor: "pointer", fontSize: 14, padding: 0 }}>
               New {roleName.toLowerCase()}? Create an account →
             </button>
@@ -2054,6 +2068,46 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
             <button onClick={() => { setMode("signin"); setPending(null); setErr(null); }} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 13, padding: 0 }}>
               ← Start over
             </button>
+          </>
+        )}
+
+        {mode === "recover-2fa" && (
+          <>
+            {!recResult ? (
+              <>
+                <p style={{ fontSize: 14, color: C.muted, margin: 0, lineHeight: 1.6 }}>
+                  This resets the authenticator setup for an account and issues a brand-new setup key. It requires the site's
+                  <strong style={{ color: C.text }}> recovery key</strong> — the <span style={{ ...mono }}>RECOVERY_KEY</span> value set in the site's
+                  environment variables, which only the site owner can access.
+                </p>
+                <Field label="Account email" type="email" value={rec.email} onChange={(e) => setRec({ ...rec, email: e.target.value })} placeholder="you@example.com" />
+                <Field label="Account password" type="password" value={rec.password} onChange={(e) => setRec({ ...rec, password: e.target.value })} />
+                <Field label="Recovery key" value={rec.key} onChange={(e) => setRec({ ...rec, key: e.target.value })} mono placeholder="From Netlify environment variables" />
+                {err && <div style={{ ...mono, fontSize: 12, color: C.warn, lineHeight: 1.5 }}>{err}</div>}
+                <Btn onClick={runRecovery} disabled={busy || !/@/.test(rec.email) || !rec.password || !rec.key.trim()}>{busy ? "Resetting…" : "Reset my authenticator"}</Btn>
+              </>
+            ) : (
+              <>
+                <div style={{ ...mono, fontSize: 12, color: C.ok, background: "#1C2A21", border: `1px solid ${C.ok}`, padding: "10px 12px", lineHeight: 1.6 }}>
+                  ✓ Two-factor reset for {recResult.email}. Your old authenticator entry no longer works.
+                </div>
+                <p style={{ fontSize: 14, color: C.muted, lineHeight: 1.6, margin: 0 }}>
+                  Delete the old entry from your authenticator app, then add a <strong style={{ color: C.text }}>new time-based entry</strong> with this setup key:
+                </p>
+                <div style={{ ...mono, fontSize: 16, letterSpacing: "0.08em", color: C.bronzeLight, background: C.panel2, border: `1px solid ${C.line}`, padding: "12px 14px", textAlign: "center", userSelect: "all" }}>
+                  {recResult.secret.match(/.{1,4}/g).join(" ")}
+                </div>
+                <p style={{ ...mono, fontSize: 11, color: C.muted, lineHeight: 1.6 }}>
+                  Then sign in normally with your password and a code from the new entry. For security, remove the RECOVERY_KEY environment variable once you're back in.
+                </p>
+                <Btn onClick={() => { setMode("signin"); setErr(null); }}>Back to sign-in</Btn>
+              </>
+            )}
+            {!recResult && (
+              <button onClick={() => { setMode("signin"); setErr(null); }} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 13, padding: 0 }}>
+                ← Back to sign-in
+              </button>
+            )}
           </>
         )}
 

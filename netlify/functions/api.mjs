@@ -480,6 +480,31 @@ async function handleAuth(req, path, body) {
     return json({ ok: true });
   }
 
+  /* ---- break-glass: rotate an account's 2FA secret (requires RECOVERY_KEY env var) ---- */
+  if (path === "recover-2fa") {
+    const RK = process.env.RECOVERY_KEY;
+    if (!RK) return bad("Recovery is not enabled. Set a RECOVERY_KEY environment variable in Netlify to enable it.", 403);
+    const { email, password, recoveryKey } = body;
+    if (!recoveryKey || !safeEqual(String(recoveryKey), String(RK))) return bad("Recovery key doesn't match.", 403);
+    const accounts = await getAccounts();
+    const account = findAccount(accounts, email);
+    if (!account) return bad("No account found with that email.", 404);
+    if (!safeEqual(hashPassword(password || "", account.salt), account.hash)) return bad("Incorrect password.", 401);
+    account.totpSecret = makeTotpSecret();
+    account.twofa = "totp";
+    await saveAccounts(accounts);
+    try {
+      await sendEmail(account.email, "Your two-factor authentication was reset", `
+        <p>Hi ${esc((account.name || "").split(" ")[0] || "there")},</p>
+        <p>The authenticator (two-factor) setup for your Guardian Shield Training account was just reset using the site's recovery key. A new setup key was issued and the old authenticator entry no longer works.</p>
+        <p>If this was you, no action is needed. If it wasn't, contact the site administrator immediately.</p>`);
+      if (ADMIN_NOTIFY && ADMIN_NOTIFY.toLowerCase() !== account.email.toLowerCase()) {
+        await sendEmail(ADMIN_NOTIFY, "2FA recovery used", `<p>The recovery key was used to reset two-factor authentication for <strong>${esc(account.email)}</strong>.</p>`);
+      }
+    } catch (e) { console.error("recovery email error:", e); }
+    return json({ ok: true, totpSecret: account.totpSecret, email: account.email });
+  }
+
   /* ---- admin: invite another administrator ---- */
   if (path === "send-admin-invite") {
     const sess = await getSession(req);
