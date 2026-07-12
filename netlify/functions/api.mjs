@@ -14,6 +14,9 @@ const INSTRUCTOR_KEY = (process.env.INSTRUCTOR_ENROLL_KEY || "SHIELD").toUpperCa
 const ADMIN_KEY = (process.env.ADMIN_ENROLL_KEY || "ADMIN").toUpperCase();
 const DEMO_MODE = process.env.DEMO_MODE !== "false";
 const STRIPE_SECRET = process.env.STRIPE_SECRET_KEY || "";
+const RESEND_KEY = process.env.RESEND_API_KEY || "";
+const EMAIL_FROM = process.env.EMAIL_FROM || "Guardian Shield Training <noreply@guardianshield.training>";
+const ADMIN_NOTIFY = process.env.ADMIN_NOTIFY_EMAIL || "";
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || "";
 const SESSION_HOURS = 12;
 
@@ -106,6 +109,31 @@ const SEED_CLASSES = [
   { id: "GS-G7H8I9", type: "instructor", date: "2026-09-12", time: "7:30 AM", location: "Guardian HQ", city: "Denver", state: "CO", seats: 8, price: 1250, instructor: "Lead Cadre", enrolled: [], completed: false },
 ];
 
+/* ================= email (Resend) ================= */
+async function sendEmail(to, subject, bodyHtml) {
+  if (!RESEND_KEY) return { skipped: true };
+  const html = `<!doctype html><body style="margin:0;background:#12100C;padding:24px 12px;font-family:Georgia,serif;">
+    <div style="max-width:560px;margin:0 auto;background:#1C1913;border:1px solid #3A3527;border-top:4px solid #C9A45C;">
+      <div style="padding:22px 26px;border-bottom:1px solid #3A3527;">
+        <div style="color:#C9A45C;font-size:11px;letter-spacing:3px;font-family:Courier,monospace;">GUARDIAN SHIELD TRAINING</div>
+        <div style="color:#EAE3D2;font-size:22px;font-weight:bold;margin-top:6px;">${subject}</div>
+      </div>
+      <div style="padding:22px 26px;color:#EAE3D2;font-size:15px;line-height:1.7;">${bodyHtml}</div>
+      <div style="padding:14px 26px;border-top:1px solid #3A3527;color:#A29A85;font-size:12px;font-style:italic;">Protect what matters most. · guardianshield.training</div>
+    </div></body>`;
+  try {
+    const r = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${RESEND_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ from: EMAIL_FROM, to: Array.isArray(to) ? to : [to], subject, html }),
+    });
+    const j = await r.json();
+    if (!r.ok) { console.error("email send failed:", j); return { error: j.message || "send failed" }; }
+    return { id: j.id };
+  } catch (e) { console.error("email error:", e); return { error: String(e) }; }
+}
+const esc = (t) => String(t || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
 /* ================= Stripe helpers ================= */
 async function stripeReq(path, params) {
   const body = new URLSearchParams();
@@ -171,9 +199,40 @@ async function finalizeRegistration({ classId, student, discountCode, passcode, 
   const place = [cls.location, [cls.city, cls.state].filter(Boolean).join(", ")].filter(Boolean).join(" — ");
   notices.unshift({
     id: uid(), when: new Date().toLocaleString(), classId: cls.id, read: false,
-    text: `New registration — ${record.name} (${record.email}) enrolled in ${cls.type === "instructor" ? "Instructor Course" : "2-Day Certification"} on ${cls.date} at ${place}. Paid $${paidAmount.toFixed(2)}${discountCode ? ` (code ${discountCode})` : ""}${paymentRef ? " via Stripe" : ""}.`,
+    text: `New registration — ${record.name} (${record.email}) enrolled in the ${cls.type === "instructor" ? "Instructor Course" : "2-Day Certification"} scheduled for ${cls.date} at ${place}. Paid $${paidAmount.toFixed(2)}${discountCode ? ` (code ${discountCode})` : ""}${paymentRef ? " via Stripe" : ""}.`,
   });
   await writeJson("gs:notices", notices);
+
+  /* ---- Phase 3: emails (best-effort; never blocks the registration) ---- */
+  try {
+    const typeLabel = cls.type === "instructor" ? "Instructor Certification Course" : "Guardian 2-Day Certification";
+    await sendEmail(record.email, "Registration confirmed", `
+      <p>Hi ${esc(record.name.split(" ")[0])},</p>
+      <p>Your seat is reserved. Here are your details:</p>
+      <p style="background:#242017;border:1px solid #3A3527;padding:12px 16px;">
+        <strong>${esc(typeLabel)}</strong><br>
+        Date: ${esc(cls.date)} · ${esc(cls.time)}<br>
+        Location: ${esc(place)}<br>
+        Instructor: ${esc(cls.instructor)}<br>
+        Amount paid: $${paidAmount.toFixed(2)}${discountCode ? ` (code ${esc(discountCode)})` : ""}<br>
+        Registration reference: <strong style="color:#C9A45C;">${record.ref}</strong>
+      </p>
+      <p>Bring a valid ID${cls.type === "instructor" ? "" : " and your own firearm for Day 1 live-fire training"}. The range safety briefing and liability waiver are completed on-site before training begins.</p>`);
+
+    const accounts = await getAccounts();
+    const instr = accounts.find((a) => a.role === "instructor" && a.name.toLowerCase() === (cls.instructor || "").toLowerCase());
+    const alertHtml = `
+      <p>A new student registered for your class:</p>
+      <p style="background:#242017;border:1px solid #3A3527;padding:12px 16px;">
+        <strong>${esc(record.name)}</strong> · ${esc(record.email)}${record.phone ? " · " + esc(record.phone) : ""}${record.company ? "<br>Company: " + esc(record.company) : ""}<br>
+        ${esc(typeLabel)} — ${esc(cls.date)} at ${esc(place)}<br>
+        Paid $${paidAmount.toFixed(2)} · Ref ${record.ref}
+      </p>
+      <p>The full roster is in your Instructor Portal.</p>`;
+    if (instr) await sendEmail(instr.email, "New class registration", alertHtml);
+    if (ADMIN_NOTIFY && (!instr || instr.email.toLowerCase() !== ADMIN_NOTIFY.toLowerCase())) await sendEmail(ADMIN_NOTIFY, "New class registration", alertHtml);
+  } catch (e) { console.error("registration email error:", e); }
+
   return { ok: true, ref: record.ref };
 }
 
@@ -309,8 +368,17 @@ async function handleAuth(req, path, body) {
     await writeJson(`auth:pending:${pendingToken}`, {
       type: "reset", email: account.email, smsCode, expires: Date.now() + 10 * 60 * 1000,
     });
+    let emailSent = false;
+    if (RESEND_KEY) {
+      const result = await sendEmail(account.email, "Your password reset code", `
+        <p>Hi ${esc(account.name.split(" ")[0])},</p>
+        <p>Use this code to reset your Guardian Shield Training password. It expires in 10 minutes.</p>
+        <p style="background:#242017;border:1px solid #C9A45C;padding:14px 16px;text-align:center;font-family:Courier,monospace;font-size:24px;color:#E3CD96;letter-spacing:6px;">${smsCode}</p>
+        <p>If you didn't request this, you can safely ignore this email — your password is unchanged.</p>`);
+      emailSent = !result.error && !result.skipped;
+    }
     return json({
-      pendingToken, twofa: account.twofa,
+      pendingToken, twofa: account.twofa, emailSent,
       ...(DEMO_MODE ? { demoSms: smsCode, demoTotpSecret: account.totpSecret } : {}),
     });
   }
@@ -581,6 +649,14 @@ async function handleApply(body) {
     submittedAt: new Date().toISOString(), status: "pending",
   });
   await writeJson("gs:apps", apps);
+  if (ADMIN_NOTIFY) {
+    try {
+      await sendEmail(ADMIN_NOTIFY, "New instructor application", `
+        <p><strong>${esc(name)}</strong>${company ? " (" + esc(company) + ")" : ""} applied to become a Guardian Instructor.</p>
+        <p style="background:#242017;border:1px solid #3A3527;padding:12px 16px;">${esc(email)}${phone ? " · " + esc(phone) : ""}<br>${resumeName ? "Resume attached: " + esc(resumeName) : "No resume attached"}</p>
+        <p>Review it in the Instructor Portal → Instructor applications.</p>`);
+    } catch (e) { console.error("application email error:", e); }
+  }
   return json({ ok: true });
 }
 
@@ -600,6 +676,13 @@ async function handleRequestClass(body) {
       notes: (notes || "").trim(), submittedAt: new Date().toISOString(), read: false,
     });
     await writeJson("gs:requests", requests);
+    if (ADMIN_NOTIFY) {
+      try {
+        await sendEmail(ADMIN_NOTIFY, "New class request", `
+          <p><strong>${esc(name)}</strong> requested a class in <strong>${esc(area)}</strong>.</p>
+          <p style="background:#242017;border:1px solid #3A3527;padding:12px 16px;">${esc(email)}${phone ? " · " + esc(phone) : ""}<br>Group size: ${esc(groupSize || "n/a")} · Timeframe: ${esc(timeframe || "n/a")}${notes ? "<br>Notes: " + esc(notes) : ""}</p>`);
+      } catch (e) { console.error("request email error:", e); }
+    }
   }
   return json({ ok: true });
 }
@@ -634,6 +717,75 @@ export default async (req) => {
       if (!key || !/^gs:[\w:\-\.]+$/.test(key)) return bad("A valid key is required.");
       const sess = await getSession(req);
       return await handleStorage(req, key, sess);
+    }
+    if (path === "send-approval" && req.method === "POST") {
+      const sess = await getSession(url ? req : req);
+      if (!sess || sess.role !== "instructor") return bad("Instructor access required.", 403);
+      const apps = await readJson("gs:apps", []);
+      const app = apps.find((a) => a.id === body.appId);
+      if (!app) return bad("Application not found.", 404);
+      if (app.status !== "approved" || !app.passcode) return bad("Application is not approved.", 400);
+      const result = await sendEmail(app.email, "Your instructor application is approved", `
+        <p>Congratulations ${esc(app.name.split(" ")[0])}!</p>
+        <p>Your application to become a Guardian Instructor has been <strong style="color:#6FBF8F;">approved</strong>.</p>
+        <p>Next step: register for an upcoming <strong>Instructor Certification Course</strong> on the Class Schedule page at guardianshield.training. At registration, enter your personal approval passcode:</p>
+        <p style="background:#242017;border:1px solid #C9A45C;padding:14px 16px;text-align:center;font-family:Courier,monospace;font-size:20px;color:#E3CD96;letter-spacing:2px;">${esc(app.passcode)}</p>
+        <p>This passcode is valid for one course registration.</p>`);
+      if (result.skipped) return json({ ok: true, emailed: false, reason: "Email service not configured." });
+      if (result.error) return bad("Email failed to send: " + result.error, 502);
+      app.approvalEmailedAt = new Date().toISOString();
+      await writeJson("gs:apps", apps);
+      return json({ ok: true, emailed: true });
+    }
+    if (path === "send-statement" && req.method === "POST") {
+      const sess = await getSession(req);
+      if (!sess || sess.role !== "admin") return bad("Admin access required.", 403);
+      const payments = await readJson("gs:payments", []);
+      const p = payments.find((x) => x.id === body.paymentId);
+      if (!p) return bad("Payment not found.", 404);
+      if (!p.items || !p.items.length) return bad("This payment has no itemized statement.", 400);
+      const accounts = await getAccounts();
+      let recipients;
+      if ((p.payeeType || "instructor") === "company") {
+        recipients = accounts.filter((a) => a.role === "instructor" && (a.company || "").toLowerCase() === p.payee.toLowerCase()).map((a) => a.email);
+      } else {
+        const a = accounts.find((x) => x.role === "instructor" && x.name.toLowerCase() === p.payee.toLowerCase());
+        recipients = a ? [a.email] : [];
+      }
+      recipients = [...new Set(recipients)];
+      if (!recipients.length) return json({ emailed: false, reason: "No portal account matches this payee — print the statement and deliver it manually." });
+
+      const cell = 'padding:6px 8px;border-bottom:1px solid #3A3527;';
+      const rows = p.items.map((i) => `<tr>
+        <td style="${cell}">${esc(i.date)}</td><td style="${cell}">${esc(i.classId)}</td>
+        <td style="${cell}">${esc(i.student)}</td><td style="${cell}">$${Number(i.paid).toFixed(2)}</td>
+        <td style="${cell}">${esc(i.rate)}%</td><td style="${cell}"><strong>$${Number(i.commission).toFixed(2)}</strong></td>
+      </tr>`).join("");
+      const html = `
+        <p>A commission payment has been issued to you by Guardian Shield Training.</p>
+        <p style="background:#242017;border:1px solid #3A3527;padding:12px 16px;">
+          Paid to: <strong>${esc(p.payee)}</strong> (${(p.payeeType || "instructor") === "company" ? "Company" : "Instructor"})<br>
+          Payment date: ${esc(p.date)}<br>
+          Check # / EFT record: <strong style="color:#C9A45C;">${esc(p.checkRef || "—")}</strong>${p.note ? `<br>Note: ${esc(p.note)}` : ""}
+        </p>
+        <table width="100%" style="border-collapse:collapse;font-size:13px;color:#EAE3D2;">
+          <tr>
+            ${["CLASS DATE","CLASS","STUDENT","STUDENT PAID","RATE","COMMISSION"].map((h) => `<th align="left" style="padding:6px 8px;border-bottom:2px solid #C9A45C;color:#C9A45C;font-size:10px;letter-spacing:1px;">${h}</th>`).join("")}
+          </tr>
+          ${rows}
+          <tr>
+            <td colspan="5" align="right" style="padding:10px 8px;color:#C9A45C;font-size:11px;letter-spacing:1px;">TOTAL PAYMENT — ${p.items.length} STUDENT COMMISSION${p.items.length === 1 ? "" : "S"}</td>
+            <td style="padding:10px 8px;font-size:17px;"><strong>$${Number(p.amount).toFixed(2)}</strong></td>
+          </tr>
+        </table>
+        <p>Please keep this statement for your records. Questions about this payment? Reply to this email.</p>`;
+      const result = await sendEmail(recipients, `Commission payment issued — $${Number(p.amount).toFixed(2)}`, html);
+      if (result.skipped) return json({ emailed: false, reason: "Email service not configured." });
+      if (result.error) return bad("Email failed: " + result.error, 502);
+      p.statementEmailedAt = new Date().toISOString();
+      p.statementEmailedTo = recipients.join(", ");
+      await writeJson("gs:payments", payments);
+      return json({ emailed: true, to: recipients });
     }
     if (path === "register" && req.method === "POST") return await handleRegister(body);
     if (path === "create-checkout" && req.method === "POST") return await handleCreateCheckout(req, body);

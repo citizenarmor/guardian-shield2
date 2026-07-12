@@ -456,7 +456,7 @@ export default function App() {
       id: uid(),
       when: new Date().toLocaleString(),
       classId,
-      text: `New registration — ${student.name} (${student.email}) enrolled in ${cls.type === "instructor" ? "Instructor Course" : "2-Day Certification"} on ${cls.date} at ${classPlace(cls)}. Paid $${(student.paid ?? cls.price).toFixed(2)}${student.discountCode ? ` (code ${student.discountCode})` : ""}.`,
+      text: `New registration — ${student.name} (${student.email}) enrolled in the ${cls.type === "instructor" ? "Instructor Course" : "2-Day Certification"} scheduled for ${cls.date} at ${classPlace(cls)}. Paid $${(student.paid ?? cls.price).toFixed(2)}${student.discountCode ? ` (code ${student.discountCode})` : ""}.`,
       read: false,
     };
     await updateNotices([note, ...notices]);
@@ -530,7 +530,7 @@ export default function App() {
                 <div style={{ display: "grid", gap: 10 }}>
                   <p style={{ fontSize: 15, color: C.text, lineHeight: 1.6, margin: 0 }}>Payment received and your seat is reserved. Your registration reference:</p>
                   <div style={{ ...mono, fontSize: 20, color: C.bronzeLight, background: C.panel2, border: `1px solid ${C.bronzeDark}`, padding: "10px 14px", textAlign: "center" }}>{stripeReturn.ref}</div>
-                  <p style={{ fontSize: 13, color: C.muted, lineHeight: 1.6, margin: 0 }}>Bring a valid ID to check-in. Range safety briefing and liability waiver are completed on Day 1 before training begins.</p>
+                  <p style={{ fontSize: 13, color: C.muted, lineHeight: 1.6, margin: 0 }}>A confirmation email with your class details is on its way. Bring a valid ID to check-in — the range safety briefing and liability waiver are completed on Day 1 before training begins.</p>
                   <Btn onClick={() => setStripeReturn(null)}>Done</Btn>
                 </div>
               )}
@@ -1214,6 +1214,7 @@ function Schedule({ classes, onRegister, codes, redeemCode, requests, updateRequ
           <strong style={{ color: C.ok }}>You're registered.</strong>{" "}
           A confirmation was sent to {done.email}. Your instructor has been notified and will reach out with range details.
           <span style={{ ...mono, fontSize: 13, display: "block", marginTop: 6, color: C.muted }}>Registration ref: {done.ref}</span>
+          <span style={{ fontSize: 13, display: "block", marginTop: 6, color: C.muted }}>A confirmation email with your class details is on its way.</span>
         </div>
       )}
 
@@ -1864,9 +1865,9 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
     setErr(null); setBusy(true);
     try {
       const r = await apiPost("auth/reset-start", { role, email: rs.email });
-      setPending({ remote: true, reset: true, token: r.pendingToken, email: rs.email.trim(), twofa: r.twofa, demoSms: r.demoSms, totpSecret: r.demoTotpSecret });
+      setPending({ remote: true, reset: true, token: r.pendingToken, email: rs.email.trim(), twofa: r.twofa, demoSms: r.demoSms, totpSecret: r.demoTotpSecret, emailSent: r.emailSent });
       setTwofaCode("");
-      if (r.twofa === "sms") { setSmsSent(r.demoSms || null); setSmsMode(true); } else { setSmsMode(false); setSmsSent(null); }
+      if (r.emailSent || r.twofa === "sms") { setSmsSent(r.demoSms || null); setSmsMode(true); } else { setSmsMode(false); setSmsSent(null); }
       setMode("reset-finish");
     } catch (e) {
       if (!e.local) { setErr(e.message); setBusy(false); return; }
@@ -2034,7 +2035,14 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
 
         {mode === "reset-finish" && (
           <>
-            {smsMode ? <SmsDemoBox /> : (
+            {smsMode ? (
+              pending.emailSent ? (
+                <>
+                  <p style={{ fontSize: 14, color: C.muted, margin: 0 }}>We emailed a 6-digit code to <strong style={{ color: C.text }}>{pending.email}</strong>. Enter it below — it expires in 10 minutes.</p>
+                  {smsSent && <SmsDemoBox />}
+                </>
+              ) : <SmsDemoBox />
+            ) : (
               <>
                 <p style={{ fontSize: 14, color: C.muted, margin: 0 }}>Enter the 6-digit code from your authenticator app for <strong style={{ color: C.text }}>{pending.email}</strong>.</p>
                 {pending.totpSecret && <DemoTotpHelper secret={pending.totpSecret} />}
@@ -2287,6 +2295,7 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts }) {
                   <th style={{ padding: "6px 8px", borderBottom: `1px solid ${C.line}` }}>EMAIL</th>
                   <th style={{ padding: "6px 8px", borderBottom: `1px solid ${C.line}` }}>PHONE</th>
                   <th style={{ padding: "6px 8px", borderBottom: `1px solid ${C.line}` }}>COMPANY</th>
+                  <th style={{ padding: "6px 8px", borderBottom: `1px solid ${C.line}` }}>REGISTERED</th>
                   <th style={{ padding: "6px 8px", borderBottom: `1px solid ${C.line}` }}>REF</th>
                 </tr>
               </thead>
@@ -2297,6 +2306,7 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts }) {
                     <td style={{ padding: "6px 8px", borderBottom: `1px solid ${C.panel2}` }}>{s.email}</td>
                     <td style={{ padding: "6px 8px", borderBottom: `1px solid ${C.panel2}` }}>{s.phone || "—"}</td>
                     <td style={{ padding: "6px 8px", borderBottom: `1px solid ${C.panel2}` }}>{s.company || "—"}</td>
+                    <td style={{ padding: "6px 8px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12 }}>{s.registeredAt ? new Date(s.registeredAt).toLocaleDateString() : "—"}</td>
                     <td style={{ padding: "6px 8px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12 }}>{s.ref}</td>
                   </tr>
                 ))}
@@ -2593,12 +2603,20 @@ function PortalApps({ apps, updateApps }) {
   const setRead = async (id, read) => updateApps(apps.map((a) => (a.id === id ? { ...a, read } : a)));
 
   const setStatus = async (app, status) => {
-    await updateApps(apps.map((a) => {
+    const stamp = new Date().toISOString();
+    const next = apps.map((a) => {
       if (a.id !== app.id) return a;
-      const next = { ...a, status, decidedAt: new Date().toISOString(), read: true };
-      if (status === "approved" && !next.passcode) next.passcode = "INST-" + uid();
-      return next;
-    }));
+      const n = { ...a, status, decidedAt: stamp, read: true };
+      if (status === "approved" && !n.passcode) n.passcode = "INST-" + uid();
+      return n;
+    });
+    await updateApps(next);
+    if (status === "approved") {
+      try {
+        const r = await apiPost("send-approval", { appId: app.id });
+        if (r.emailed) await updateApps(next.map((a) => (a.id === app.id ? { ...a, approvalEmailedAt: stamp } : a)));
+      } catch (e) { /* preview mode or email not configured — the passcode box below covers it */ }
+    }
   };
 
   const STATUS_STYLE = {
@@ -2676,18 +2694,23 @@ function PortalApps({ apps, updateApps }) {
 
                 {/* approval email (demo) */}
                 {a.status === "approved" && a.passcode && (
-                  <div style={{ marginTop: 10, background: "#2A2415", border: `1px dashed ${C.bronzeDark}`, padding: "12px 14px", fontSize: 13, color: C.muted, lineHeight: 1.6 }}>
-                    <strong style={{ color: C.bronzeLight }}>Demo email sent</strong> to {a.email} — subject: <em>Your Guardian Instructor Application — Approved</em>
-                    <div style={{ marginTop: 6 }}>
-                      "Congratulations {a.name.split(" ")[0]}! Your instructor application has been approved. Register for an upcoming
-                      Instructor Certification Course on the Class Schedule page at guardianshield.training. At registration, enter your
-                      personal approval passcode: <span style={{ ...mono, color: C.bronzeLight, fontSize: 14 }}>{a.passcode}</span>.
-                      This passcode is valid for one course registration."
+                  a.approvalEmailedAt ? (
+                    <div style={{ marginTop: 10, background: "#1C2A21", border: `1px solid ${C.ok}`, padding: "12px 14px", fontSize: 13, color: C.muted, lineHeight: 1.6 }}>
+                      <strong style={{ color: C.ok }}>✓ Approval email sent</strong> to {a.email} ({new Date(a.approvalEmailedAt).toLocaleString()}) with registration passcode
+                      <span style={{ ...mono, color: C.bronzeLight, fontSize: 14 }}> {a.passcode}</span> (single-use, kept here for your records).
+                      <div style={{ ...mono, fontSize: 11, marginTop: 6 }}>{a.passcodeUsed ? "✓ PASSCODE USED — applicant has registered" : "Passcode not yet used"}</div>
                     </div>
-                    <div style={{ ...mono, fontSize: 11, marginTop: 6 }}>
-                      {a.passcodeUsed ? "✓ PASSCODE USED — applicant has registered" : "Passcode not yet used"} · In production this email is sent automatically via the email service.
+                  ) : (
+                    <div style={{ marginTop: 10, background: "#2A2415", border: `1px dashed ${C.bronzeDark}`, padding: "12px 14px", fontSize: 13, color: C.muted, lineHeight: 1.6 }}>
+                      <strong style={{ color: C.bronzeLight }}>Approved — passcode issued:</strong>
+                      <span style={{ ...mono, color: C.bronzeLight, fontSize: 14 }}> {a.passcode}</span> (single-use).
+                      <div style={{ marginTop: 6 }}>
+                        The approval email could not be sent automatically (email service not configured or unavailable) — share this
+                        passcode with {a.name.split(" ")[0]} at {a.email}, and direct them to the Class Schedule to register.
+                      </div>
+                      <div style={{ ...mono, fontSize: 11, marginTop: 6 }}>{a.passcodeUsed ? "✓ PASSCODE USED — applicant has registered" : "Passcode not yet used"}</div>
                     </div>
-                  </div>
+                  )
                 )}
 
                 <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -3728,7 +3751,7 @@ function AdminClassReport({ classes, accounts }) {
   const studentRows = () => filtered.flatMap((r) => r.students.map((s) => ({
     "Class ID": r.id, "Date": r.date, "Type": r.type === "instructor" ? "Instructor Course" : "2-Day Certification",
     "Location": r.location, "City": r.city || "", "State": r.state || "", "Instructor": r.instructor, "Company": r.company,
-    "Student": s.name, "Student Company": s.company || "", "Email": s.email, "Phone": s.phone || "", "Ref": s.ref, "Discount Code": s.discountCode || "", "Paid": (typeof s.paid === "number" ? s.paid : r.price).toFixed(2),
+    "Student": s.name, "Student Company": s.company || "", "Email": s.email, "Phone": s.phone || "", "Ref": s.ref, "Registered On": s.registeredAt ? new Date(s.registeredAt).toLocaleDateString() : "", "Discount Code": s.discountCode || "", "Paid": (typeof s.paid === "number" ? s.paid : r.price).toFixed(2),
   })));
   const classRows = () => filtered.map((r) => ({
     "Class ID": r.id, "Date": r.date, "Type": r.type === "instructor" ? "Instructor Course" : "2-Day Certification",
@@ -3794,6 +3817,7 @@ function AdminClassReport({ classes, accounts }) {
                             <span>{s.email}</span>
                             {s.phone && <span>{s.phone}</span>}
                             <span>{s.ref}</span>
+                            {s.registeredAt && <span>reg. {new Date(s.registeredAt).toLocaleDateString()}</span>}
                             {s.discountCode && <span style={{ color: C.bronze }}>code {s.discountCode}</span>}
                             <span style={{ marginLeft: "auto", color: C.ok }}>{money(typeof s.paid === "number" ? s.paid : r.price)}</span>
                           </div>
@@ -3851,6 +3875,7 @@ function PaymentStatementModal({ payment, onClose }) {
             <div><div style={{ ...mono, fontSize: 9, letterSpacing: "0.14em", color: bronze }}>PAYMENT DATE</div><div style={{ fontWeight: 700 }}>{fmtDate(payment.date)}</div></div>
             <div><div style={{ ...mono, fontSize: 9, letterSpacing: "0.14em", color: bronze }}>CHECK # / EFT RECORD</div><div style={{ ...mono, fontWeight: 700 }}>{payment.checkRef || "—"}</div></div>
             <div><div style={{ ...mono, fontSize: 9, letterSpacing: "0.14em", color: bronze }}>RECORDED BY</div><div>{payment.recordedBy || "—"}</div></div>
+            {payment.statementEmailedTo && <div><div style={{ ...mono, fontSize: 9, letterSpacing: "0.14em", color: bronze }}>EMAILED TO</div><div style={{ fontSize: 12 }}>{payment.statementEmailedTo}</div></div>}
           </div>
           {payment.note && <div style={{ ...serif, fontSize: 12, marginTop: 10, color: "#3A3222" }}>Note: {payment.note}</div>}
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, marginTop: 16 }}>
@@ -3896,6 +3921,7 @@ function AdminCommissions({ classes, accounts, payments, savePayments, saveClass
   const [pb, setPb] = useState({ type: "instructor", payee: "", checkRef: "", date: new Date().toISOString().slice(0, 10), note: "" });
   const [sel, setSel] = useState({});
   const [pbErr, setPbErr] = useState(null);
+  const [stmtMsg, setStmtMsg] = useState(null);
 
   const round2 = (n) => Math.round(n * 100) / 100;
   const companyOf = (name) => {
@@ -3960,8 +3986,24 @@ function AdminCommissions({ classes, accounts, payments, savePayments, saveClass
       amount: chosenTotal, date: pb.date, note: pb.note.trim(), checkRef: pb.checkRef.trim(),
       items: chosen, recordedBy: adminName, recordedAt: new Date().toISOString(),
     };
-    await savePayments([payment, ...payments]);
-    setStatement(payment);
+    let list = [payment, ...payments];
+    await savePayments(list);
+    let shown = payment;
+    setStmtMsg(null);
+    try {
+      const r = await apiPost("send-statement", { paymentId: payment.id });
+      if (r.emailed) {
+        shown = { ...payment, statementEmailedAt: new Date().toISOString(), statementEmailedTo: r.to.join(", ") };
+        list = list.map((x) => (x.id === payment.id ? shown : x));
+        await savePayments(list);
+        setStmtMsg({ ok: true, text: `✓ Statement emailed to ${r.to.join(", ")}.` });
+      } else {
+        setStmtMsg({ ok: false, text: r.reason || "Statement email not sent — print and deliver it manually." });
+      }
+    } catch (e) {
+      setStmtMsg({ ok: false, text: e.local ? "Statement email isn't available in preview mode — use Print / Export." : `Statement email failed: ${e.message}` });
+    }
+    setStatement(shown);
     setPb({ type: pb.type, payee: "", checkRef: "", date: new Date().toISOString().slice(0, 10), note: "" });
     setSel({}); setPbErr(null);
   };
@@ -4089,6 +4131,9 @@ function AdminCommissions({ classes, accounts, payments, savePayments, saveClass
       {/* payout builder */}
       <div style={{ background: C.panel, border: `1px solid ${C.bronzeDark}`, padding: "18px 20px", display: "grid", gap: 14 }}>
         <div style={{ ...display, fontWeight: 700, fontSize: 18, textTransform: "uppercase", color: C.bronzeLight }}>Create a commission payment</div>
+        {stmtMsg && (
+          <div style={{ ...mono, fontSize: 12, color: stmtMsg.ok ? C.ok : C.warn, background: stmtMsg.ok ? "#1C2A21" : "#2E1F16", border: `1px solid ${stmtMsg.ok ? C.ok : C.warn}`, padding: "8px 12px" }}>{stmtMsg.text}</div>
+        )}
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
           <div>
             <FieldLabel>Pay to</FieldLabel>
@@ -4216,6 +4261,7 @@ function AdminCommissions({ classes, accounts, payments, savePayments, saveClass
                       {(p.payeeType || "instructor") === "company" ? "COMPANY" : "INSTRUCTOR"}
                     </span>
                     {p.checkRef && <span style={{ color: C.bronzeLight }}>{p.checkRef}</span>}
+                    {p.statementEmailedAt && <span style={{ color: C.ok }}>✉ emailed</span>}
                     {p.items && <span style={{ color: C.muted }}>{p.items.length} commission{p.items.length === 1 ? "" : "s"}</span>}
                     {p.note && <span style={{ color: C.muted }}>{p.note}</span>}
                     <span style={{ marginLeft: "auto", color: C.ok, fontSize: 14 }}>{money(p.amount)}</span>
