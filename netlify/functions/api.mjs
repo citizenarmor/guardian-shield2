@@ -334,10 +334,11 @@ async function handleAuth(req, path, body) {
     if (!/@/.test(email || "")) return bad("Enter a valid email address.");
     if ((password || "").length < 8) return bad("Password must be at least 8 characters.");
     let inviteRecord = null;
-    if (role === "admin" && body.inviteToken) {
+    if (body.inviteToken) {
       inviteRecord = await readJson(`gs:admininvite:${body.inviteToken}`, null);
       if (!inviteRecord || inviteRecord.usedAt) return bad("That invitation link has already been used or is invalid.");
       if (inviteRecord.expires < Date.now()) return bad("That invitation link has expired — ask for a new one.");
+      if ((inviteRecord.role || "admin") !== role) return bad("This invitation is for a different account type.");
       if (inviteRecord.email.toLowerCase() !== String(email || "").trim().toLowerCase()) return bad(`This invitation was issued to ${inviteRecord.email}. Sign up with that email address.`);
     } else {
       const wanted = role === "admin" ? ADMIN_KEY : INSTRUCTOR_KEY;
@@ -510,26 +511,38 @@ async function handleAuth(req, path, body) {
     const sess = await getSession(req);
     if (!sess || sess.role !== "admin") return bad("Admin access required.", 403);
     const { name, email } = body;
+    const inviteRole = body.role === "instructor" ? "instructor" : "admin";
     if (!/@/.test(email || "")) return bad("Enter a valid email address.");
     const accounts = await getAccounts();
     if (findAccount(accounts, email)) return bad("An account with that email already exists.");
     const token = randomToken();
     await writeJson(`gs:admininvite:${token}`, {
-      name: (name || "").trim(), email: email.trim(),
+      role: inviteRole, name: (name || "").trim(), email: email.trim(),
       invitedBy: sess.email, createdAt: new Date().toISOString(),
       expires: Date.now() + 7 * 24 * 60 * 60 * 1000,
     });
-    const inviteUrl = `https://guardianshield.training/?view=admin&invite=${token}`;
+    const inviteUrl = `https://guardianshield.training/?view=${inviteRole === "instructor" ? "portal" : "admin"}&invite=${token}`;
     let emailSent = false;
     if (RESEND_KEY) {
-      const result = await sendEmail(email.trim(), "You're invited to administer Guardian Shield Training", `
+      const subject = inviteRole === "instructor"
+        ? "You're invited to join Guardian Shield Training as an instructor"
+        : "You're invited to administer Guardian Shield Training";
+      const bodyHtml = inviteRole === "instructor" ? `
+        <p>Hi ${esc((name || "there").split(" ")[0])},</p>
+        <p><strong>${esc(sess.name || sess.email)}</strong> has invited you to join the Guardian Shield Training platform as an instructor.</p>
+        <p>Use the button below to create your instructor portal account. You'll set a password and add the account to an authenticator app for two-factor sign-in. Once you're in, you can sign your instructor agreement and submit your W-9 from the My Agreement tab.</p>
+        <p style="text-align:center;margin:22px 0;">
+          <a href="${inviteUrl}" style="background:#C9A45C;color:#1A1509;font-weight:700;padding:13px 26px;text-decoration:none;letter-spacing:0.04em;">Create your instructor account &rarr;</a>
+        </p>
+        <p style="font-size:13px;color:#A99F86;">This invitation is for ${esc(email.trim())} only and expires in 7 days. If you weren't expecting it, you can ignore this email.</p>` : `
         <p>Hi ${esc((name || "there").split(" ")[0])},</p>
         <p><strong>${esc(sess.name || sess.email)}</strong> has invited you to become an administrator of the Guardian Shield Training platform.</p>
         <p>Use the button below to create your admin account. You'll set a password and add the account to an authenticator app for two-factor sign-in.</p>
         <p style="text-align:center;margin:22px 0;">
           <a href="${inviteUrl}" style="background:#C9A45C;color:#1A1509;font-weight:700;padding:13px 26px;text-decoration:none;letter-spacing:0.04em;">Create your admin account &rarr;</a>
         </p>
-        <p style="font-size:13px;color:#A99F86;">This invitation is for ${esc(email.trim())} only and expires in 7 days. If you weren't expecting it, you can ignore this email.</p>`);
+        <p style="font-size:13px;color:#A99F86;">This invitation is for ${esc(email.trim())} only and expires in 7 days. If you weren't expecting it, you can ignore this email.</p>`;
+      const result = await sendEmail(email.trim(), subject, bodyHtml);
       emailSent = !result.error && !result.skipped;
     }
     return json({ ok: true, emailSent, inviteUrl });

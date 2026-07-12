@@ -596,6 +596,7 @@ export default function App() {
           {view === "instructor" && <InstructorApply apps={apps} updateApps={updateApps} go={setView} classes={classes} />}
           {view === "portal" && (
             <Portal
+              inviteToken={adminInvite}
               user={portalUser} setUser={setPortalUser} reloadData={reloadProtected}
               accounts={accounts} updateAccounts={updateAccounts}
               classes={classes} updateClasses={updateClasses}
@@ -2018,7 +2019,7 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
           <>
             {inviteToken && (
               <div style={{ ...mono, fontSize: 12, color: C.ok, background: "#1C2A21", border: `1px solid ${C.ok}`, padding: "10px 12px", lineHeight: 1.6 }}>
-                You've been invited to become an administrator. Create your account below using the email address the invitation was sent to — no enrollment key needed.
+                You've been invited to join as {roleName.toLowerCase() === "admin" ? "an administrator" : "an instructor"}. Create your account below using the email address the invitation was sent to — no enrollment key needed.
               </div>
             )}
             <Field label="Full name" value={su.name} onChange={(e) => setSu({ ...su, name: e.target.value })} placeholder="Aaron Whitfield" autoComplete="name" />
@@ -2158,11 +2159,11 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
   );
 }
 
-function Portal({ user, setUser, reloadData, accounts, updateAccounts, classes, updateClasses, certs, updateCerts, notices, updateNotices, apps, updateApps, codes, updateCodes, requests, updateRequests }) {
+function Portal({ user, setUser, reloadData, accounts, updateAccounts, classes, updateClasses, certs, updateCerts, notices, updateNotices, apps, updateApps, codes, updateCodes, requests, updateRequests, inviteToken = null }) {
   const [tab, setTab] = useState("classes");
 
   if (!user) {
-    return <AuthGate accounts={accounts} updateAccounts={updateAccounts} onSignedIn={setUser} />;
+    return <AuthGate accounts={accounts} updateAccounts={updateAccounts} onSignedIn={setUser} inviteToken={inviteToken} />;
   }
 
   const instrName = user.name || "";
@@ -3919,6 +3920,21 @@ function InstructorAccounts({ accounts }) {
   const [sort, setSort] = useState({ key: "name", dir: "asc" });
   const [msg, setMsg] = useState(null);
   const [docView, setDocView] = useState(null);
+  const [inv, setInv] = useState({ name: "", email: "" });
+  const [invBusy, setInvBusy] = useState(false);
+  const [invMsg, setInvMsg] = useState(null);
+
+  const sendInvite = async () => {
+    setInvBusy(true); setInvMsg(null);
+    try {
+      const r = await apiPost("auth/send-admin-invite", { role: "instructor", name: inv.name, email: inv.email });
+      setInvMsg(r.emailSent
+        ? { ok: true, text: `Invitation emailed to ${inv.email}. It expires in 7 days and works once.` }
+        : { ok: true, text: `Invitation created, but the email couldn't be sent. Share this link with them directly (expires in 7 days): ${r.inviteUrl}` });
+      setInv({ name: "", email: "" });
+    } catch (e) { setInvMsg({ ok: false, text: e.local ? "Invitations require the live site." : e.message }); }
+    setInvBusy(false);
+  };
 
   const sorted = [...rows].sort((a, b) => {
     const va = String(a[sort.key] ?? "").toLowerCase(), vb = String(b[sort.key] ?? "").toLowerCase();
@@ -3940,6 +3956,19 @@ function InstructorAccounts({ accounts }) {
 
   return (
     <div>
+      <div style={{ background: C.panel, border: `1px solid ${C.line}`, padding: "18px 20px", marginBottom: 24, display: "grid", gap: 10, maxWidth: 560 }}>
+        <div style={{ ...display, fontWeight: 700, fontSize: 18, textTransform: "uppercase", color: C.bronzeLight }}>Add an instructor</div>
+        <p style={{ color: C.muted, fontSize: 13, lineHeight: 1.6, margin: 0 }}>
+          Sends a one-time email link to create their instructor portal account directly — no application, passcode, or enrollment key needed. Once in, they can sign the instructor agreement and submit a W-9 from their My Agreement tab.
+        </p>
+        <div className="gs-row-2">
+          <Field label="Name" value={inv.name} onChange={(e) => setInv({ ...inv, name: e.target.value })} placeholder="Jordan Whitfield" />
+          <Field label="Email" type="email" value={inv.email} onChange={(e) => setInv({ ...inv, email: e.target.value })} placeholder="them@example.com" />
+        </div>
+        {invMsg && <div style={{ ...mono, fontSize: 12, color: invMsg.ok ? C.ok : C.warn, lineHeight: 1.6, wordBreak: "break-all" }}>{invMsg.text}</div>}
+        <Btn small onClick={sendInvite} disabled={invBusy || !/@/.test(inv.email)}>{invBusy ? "Sending…" : "Send instructor invitation"}</Btn>
+      </div>
+
       <div style={{ ...display, fontWeight: 700, fontSize: 20, textTransform: "uppercase", color: C.bronzeLight }}>Instructor Accounts <span style={{ ...mono, fontSize: 12, color: C.muted }}>({rows.length})</span></div>
       <p style={{ color: C.muted, fontSize: 13, lineHeight: 1.6, margin: "6px 0 12px", maxWidth: 720 }}>
         Every approved instructor with a portal account — including those who haven't completed the certification course yet. Reset a password here if an instructor is locked out.
