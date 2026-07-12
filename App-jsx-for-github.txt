@@ -585,7 +585,7 @@ export default function App() {
               media={media} updateMedia={updateMedia} go={setView}
             />
           )}
-          {view === "training" && <Training go={setView} />}
+          {view === "training" && <Training go={setView} media={media} />}
           {view === "schedule" && <Schedule classes={classes} onRegister={registerStudent} codes={codes} redeemCode={redeemCode} requests={requests} updateRequests={updateRequests} apps={apps} updateApps={updateApps} reloadClasses={reloadClasses} />}
           {view === "verify" && <Verify certs={certs} />}
           {view === "instructor" && <InstructorApply apps={apps} updateApps={updateApps} go={setView} classes={classes} />}
@@ -1070,7 +1070,9 @@ function About({ go }) {
 /* ============================================================
    TRAINING — curriculum
    ============================================================ */
-function Training({ go }) {
+function Training({ go, media = { photos: [], videos: [] } }) {
+  const tPhotos = media.trainingPhotos || [];
+  const tVideos = media.trainingVideos || [];
   const days = [
     {
       label: "Day One — Live Fire",
@@ -1132,6 +1134,38 @@ function Training({ go }) {
           <Btn onClick={() => go("schedule")}>Register for a class</Btn>
         </div>
       </div>
+
+      {/* training photo gallery — managed in the Admin portal */}
+      {tPhotos.length > 0 && (
+        <section style={{ maxWidth: 1140, margin: "0 auto", padding: "56px 0 0" }}>
+          <SectionTitle eyebrow="From the range">Training in action</SectionTitle>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 16 }}>
+            {tPhotos.map((p) => (
+              <figure key={p.id} style={{ margin: 0, background: C.panel, border: `1px solid ${C.line}` }}>
+                <img src={p.src} alt={p.caption || "Guardian training photo"} style={{ width: "100%", aspectRatio: "3 / 4", objectFit: "cover", display: "block" }} />
+                {p.caption && <figcaption style={{ ...mono, fontSize: 11, color: C.muted, padding: "8px 10px" }}>{p.caption}</figcaption>}
+              </figure>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* training video section — managed in the Admin portal */}
+      {tVideos.length > 0 && (
+        <section style={{ maxWidth: 1140, margin: "0 auto", padding: "56px 0 0" }}>
+          <SectionTitle eyebrow="Video">See the training</SectionTitle>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16, marginTop: 8 }}>
+            {tVideos.map((v) => (
+              <div key={v.id} style={{ background: C.panel, border: `1px solid ${C.line}` }}>
+                <div style={{ width: "100%", aspectRatio: "16 / 9" }}>
+                  <VideoPlayer url={v.url} title={v.title} />
+                </div>
+                {v.title && <div style={{ ...mono, fontSize: 11, color: C.muted, padding: "8px 10px", borderTop: `1px solid ${C.line}` }}>{v.title}</div>}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   );
 }
@@ -3569,8 +3603,10 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
 
   const firstName = (user.name || "").trim().split(/\s+/)[0] || "admin";
   const tabs = [
-    ["photos", `Photos (${media.photos.length})`],
-    ["videos", `Videos (${media.videos.length})`],
+    ["photos", `Product photos (${media.photos.length})`],
+    ["tphotos", `Training photos (${(media.trainingPhotos || []).length})`],
+    ["videos", `Product videos (${media.videos.length})`],
+    ["tvideos", `Training videos (${(media.trainingVideos || []).length})`],
     ["users", `Users (${d.certs.length})`],
     ["admins", `Admins (${d.accounts.filter((a) => a.role === "admin").length})`],
     ["report", "Class report"],
@@ -3599,7 +3635,9 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
       </div>
       <div style={{ marginTop: 24 }}>
         {tab === "photos" && <AdminPhotos media={media} updateMedia={updateMedia} />}
+        {tab === "tphotos" && <AdminPhotos media={media} updateMedia={updateMedia} listKey="trainingPhotos" pageLabel="The Training" />}
         {tab === "videos" && <AdminVideos media={media} updateMedia={updateMedia} />}
+        {tab === "tvideos" && <AdminVideos media={media} updateMedia={updateMedia} listKey="trainingVideos" pageLabel="The Training" allowHome={false} />}
         {tab === "users" && <AdminUsers certs={d.certs} saveCerts={saveCerts} accounts={d.accounts} refresh={loadAll} />}
         {tab === "admins" && <AdminAdmins accounts={d.accounts} refresh={loadAll} currentEmail={user.email} />}
         {tab === "report" && <AdminClassReport classes={d.classes} accounts={d.accounts} />}
@@ -3609,7 +3647,9 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
   );
 }
 
-function AdminPhotos({ media, updateMedia }) {
+function AdminPhotos({ media, updateMedia, listKey = "photos", pageLabel = "The Product" }) {
+  const photos = media[listKey] || [];
+  const put = (next) => updateMedia({ ...media, [listKey]: next });
   const [caption, setCaption] = useState("");
   const [err, setErr] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -3624,7 +3664,7 @@ function AdminPhotos({ media, updateMedia }) {
     setErr(null); setBusy(true);
     try {
       const src = await compressImageFile(file);
-      await updateMedia({ ...media, photos: [...media.photos, { id: uid(), src, caption: caption.trim() }] });
+      await put([...photos, { id: uid(), src, caption: caption.trim() }]);
       setCaption("");
     } catch (ex) {
       setErr("Couldn't process that image. Try a different file.");
@@ -3633,20 +3673,20 @@ function AdminPhotos({ media, updateMedia }) {
   };
 
   const move = async (id, dir) => {
-    const i = media.photos.findIndex((p) => p.id === id);
+    const i = photos.findIndex((p) => p.id === id);
     const j = i + dir;
-    if (j < 0 || j >= media.photos.length) return;
-    const next = [...media.photos];
+    if (j < 0 || j >= photos.length) return;
+    const next = [...photos];
     [next[i], next[j]] = [next[j], next[i]];
-    await updateMedia({ ...media, photos: next });
+    await put(next);
   };
 
   const saveCaption = async (id) => {
-    await updateMedia({ ...media, photos: media.photos.map((p) => (p.id === id ? { ...p, caption: editCaption.trim() } : p)) });
+    await put(photos.map((p) => (p.id === id ? { ...p, caption: editCaption.trim() } : p)));
     setEditingId(null);
   };
 
-  const remove = async (id) => updateMedia({ ...media, photos: media.photos.filter((p) => p.id !== id) });
+  const remove = async (id) => put(photos.filter((p) => p.id !== id));
 
   const smallBtn = { ...mono, fontSize: 12, background: "none", border: `1px solid ${C.bronzeDark}`, color: C.bronze, padding: "4px 9px", cursor: "pointer", borderRadius: 2 };
 
@@ -3663,15 +3703,15 @@ function AdminPhotos({ media, updateMedia }) {
           <input type="file" accept="image/*" onChange={addPhoto} disabled={busy} style={{ display: "none" }} />
         </label>
         {err && <div style={{ ...mono, fontSize: 12, color: C.warn }}>{err}</div>}
-        <div style={{ ...mono, fontSize: 11, color: C.muted }}>Images are resized automatically for fast page loads. They appear on The Product page immediately.</div>
+        <div style={{ ...mono, fontSize: 11, color: C.muted }}>Images are resized automatically for fast page loads. They appear on {pageLabel} page immediately.</div>
       </div>
 
       {/* photo list */}
-      {media.photos.length === 0 ? (
-        <p style={{ color: C.muted }}>No photos yet — the gallery on The Product page will show "coming soon" until one is added.</p>
+      {photos.length === 0 ? (
+        <p style={{ color: C.muted }}>No photos yet — the gallery on {pageLabel} page stays empty until one is added.</p>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 16 }}>
-          {media.photos.map((p, i) => (
+          {photos.map((p, i) => (
             <div key={p.id} style={{ background: C.panel, border: `1px solid ${C.line}` }}>
               <img src={p.src} alt={p.caption || "Gallery photo"} style={{ width: "100%", aspectRatio: "3 / 4", objectFit: "cover", display: "block" }} />
               <div style={{ padding: "10px 12px", display: "grid", gap: 8 }}>
@@ -3690,7 +3730,7 @@ function AdminPhotos({ media, updateMedia }) {
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                       <button onClick={() => { setEditingId(p.id); setEditCaption(p.caption || ""); }} style={smallBtn}>Edit</button>
                       <button onClick={() => move(p.id, -1)} disabled={i === 0} style={{ ...smallBtn, opacity: i === 0 ? 0.4 : 1 }}>←</button>
-                      <button onClick={() => move(p.id, 1)} disabled={i === media.photos.length - 1} style={{ ...smallBtn, opacity: i === media.photos.length - 1 ? 0.4 : 1 }}>→</button>
+                      <button onClick={() => move(p.id, 1)} disabled={i === photos.length - 1} style={{ ...smallBtn, opacity: i === photos.length - 1 ? 0.4 : 1 }}>→</button>
                       <button onClick={() => remove(p.id)} style={{ ...smallBtn, border: `1px solid ${C.line}`, color: C.warn }}>Delete</button>
                     </div>
                   </>
@@ -3704,7 +3744,9 @@ function AdminPhotos({ media, updateMedia }) {
   );
 }
 
-function AdminVideos({ media, updateMedia }) {
+function AdminVideos({ media, updateMedia, listKey = "videos", pageLabel = "The Product", allowHome = true }) {
+  const videos = media[listKey] || [];
+  const put = (extra) => updateMedia({ ...media, ...extra });
   const [f, setF] = useState({ title: "", url: "" });
   const [err, setErr] = useState(null);
   const [editingId, setEditingId] = useState(null);
@@ -3713,17 +3755,17 @@ function AdminVideos({ media, updateMedia }) {
   const add = async () => {
     if (!f.url.trim()) return setErr("Paste a video link (YouTube or Vimeo).");
     setErr(null);
-    await updateMedia({ ...media, videos: [...media.videos, { id: uid(), title: f.title.trim(), url: f.url.trim() }] });
+    await put({ [listKey]: [...videos, { id: uid(), title: f.title.trim(), url: f.url.trim() }] });
     setF({ title: "", url: "" });
   };
 
   const saveEdit = async () => {
     if (!ef.url.trim()) return;
-    await updateMedia({ ...media, videos: media.videos.map((v) => (v.id === editingId ? { ...v, title: ef.title.trim(), url: ef.url.trim() } : v)) });
+    await put({ [listKey]: videos.map((v) => (v.id === editingId ? { ...v, title: ef.title.trim(), url: ef.url.trim() } : v)) });
     setEditingId(null);
   };
 
-  const remove = async (id) => updateMedia({ ...media, videos: media.videos.filter((v) => v.id !== id), ...(media.homeVideoId === id ? { homeVideoId: "" } : {}) });
+  const remove = async (id) => put({ [listKey]: videos.filter((v) => v.id !== id), ...(media.homeVideoId === id ? { homeVideoId: "" } : {}) });
 
   const smallBtn = { ...mono, fontSize: 12, background: "none", border: `1px solid ${C.bronzeDark}`, color: C.bronze, padding: "4px 9px", cursor: "pointer", borderRadius: 2 };
 
@@ -3736,15 +3778,15 @@ function AdminVideos({ media, updateMedia }) {
         <Field label="Video link (YouTube or Vimeo)" value={f.url} onChange={(e) => setF({ ...f, url: e.target.value })} mono placeholder="https://www.youtube.com/watch?v=…" />
         {err && <div style={{ ...mono, fontSize: 12, color: C.warn }}>{err}</div>}
         <Btn small onClick={add}>Add video</Btn>
-        <div style={{ ...mono, fontSize: 11, color: C.muted }}>Regular YouTube/Vimeo links are converted to players automatically. Direct video file links (.mp4, .webm) play in a built-in viewer. Use "Set as Home page video" to feature one on the Home page.</div>
+        <div style={{ ...mono, fontSize: 11, color: C.muted }}>Regular YouTube/Vimeo links are converted to players automatically. Direct video file links (.mp4, .webm) play in a built-in viewer.{allowHome ? ' Use "Set as Home page video" to feature one on the Home page.' : ` Videos appear on ${pageLabel} page immediately.`}</div>
       </div>
 
       {/* video list */}
-      {media.videos.length === 0 ? (
-        <p style={{ color: C.muted }}>No videos yet — The Product page shows "coming soon" frames until one is added.</p>
+      {videos.length === 0 ? (
+        <p style={{ color: C.muted }}>No videos yet — the video section on {pageLabel} page stays empty until one is added.</p>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
-          {media.videos.map((v) => (
+          {videos.map((v) => (
             <div key={v.id} style={{ background: C.panel, border: `1px solid ${C.line}` }}>
               <div style={{ width: "100%", aspectRatio: "16 / 9" }}>
                 <iframe src={toEmbedUrl(v.url)} title={v.title || "Video preview"}
@@ -3769,11 +3811,11 @@ function AdminVideos({ media, updateMedia }) {
                       {v.title || "(no title)"} · {v.url}
                     </div>
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      {media.homeVideoId === v.id ? (
+                      {allowHome && (media.homeVideoId === v.id ? (
                         <button onClick={() => updateMedia({ ...media, homeVideoId: "" })} style={{ ...smallBtn, border: `1px solid ${C.line}`, color: C.muted }}>Remove from Home page</button>
                       ) : (
                         <button onClick={() => updateMedia({ ...media, homeVideoId: v.id })} style={smallBtn}>Set as Home page video</button>
-                      )}
+                      ))}
                       <button onClick={() => { setEditingId(v.id); setEf({ title: v.title || "", url: v.url }); }} style={smallBtn}>Edit</button>
                       <button onClick={() => remove(v.id)} style={{ ...smallBtn, border: `1px solid ${C.line}`, color: C.warn }}>Delete</button>
                     </div>
