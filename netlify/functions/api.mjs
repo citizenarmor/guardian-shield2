@@ -292,6 +292,7 @@ async function finalizeRegistration({ classId, student, discountCode, passcode, 
 /* Validates a registration request; returns { cls, paid, appliedCode } or { error } */
 async function validateRegistration({ classId, student, discountCode, passcode }) {
   if (!student?.name?.trim() || !/@/.test(student?.email || "")) return { error: "Name and a valid email are required." };
+  if (String(student?.phone || "").replace(/\D/g, "").length < 10) return { error: "A mobile phone number is required." };
   const classes = await readJson("gs:classes", []);
   const cls = classes.find((c) => c.id === classId);
   if (!cls || cls.completed || cls.cancelled) return { error: "That class is not open for registration." };
@@ -332,14 +333,23 @@ async function handleAuth(req, path, body) {
     if (!name?.trim()) return bad("Enter your name.");
     if (!/@/.test(email || "")) return bad("Enter a valid email address.");
     if ((password || "").length < 8) return bad("Password must be at least 8 characters.");
-    const wanted = role === "admin" ? ADMIN_KEY : INSTRUCTOR_KEY;
-    if (String(enrollKey || "").trim().toUpperCase() !== wanted) return bad("Invalid enrollment key.");
+    let inviteRecord = null;
+    if (role === "admin" && body.inviteToken) {
+      inviteRecord = await readJson(`gs:admininvite:${body.inviteToken}`, null);
+      if (!inviteRecord || inviteRecord.usedAt) return bad("That invitation link has already been used or is invalid.");
+      if (inviteRecord.expires < Date.now()) return bad("That invitation link has expired — ask for a new one.");
+      if (inviteRecord.email.toLowerCase() !== String(email || "").trim().toLowerCase()) return bad(`This invitation was issued to ${inviteRecord.email}. Sign up with that email address.`);
+    } else {
+      const wanted = role === "admin" ? ADMIN_KEY : INSTRUCTOR_KEY;
+      if (String(enrollKey || "").trim().toUpperCase() !== wanted) return bad("Invalid enrollment key.");
+    }
     const accounts = await getAccounts();
     if (findAccount(accounts, email)) return bad("An account with that email already exists.");
     const salt = newSalt();
     const pendingToken = randomToken();
     const pending = {
       type: "signup", expires: Date.now() + 15 * 60 * 1000,
+      inviteToken: role === "admin" && body.inviteToken ? body.inviteToken : null,
       account: {
         id: uid(), role, name: name.trim(), company: (company || "").trim(),
         email: email.trim(), phone: (phone || "").trim(),
@@ -347,13 +357,11 @@ async function handleAuth(req, path, body) {
         totpSecret: makeTotpSecret(), twofa: "totp",
         created: new Date().toISOString().slice(0, 10),
       },
-      smsCode: sixDigits(),
     };
     await writeJson(`auth:pending:${pendingToken}`, pending);
     return json({
       pendingToken,
       totpSecret: pending.account.totpSecret,
-      ...(DEMO_MODE ? { demoSms: pending.smsCode } : {}),
     });
   }
 
@@ -362,14 +370,16 @@ async function handleAuth(req, path, body) {
     const { pendingToken, code, method } = body;
     const pending = await readJson(`auth:pending:${pendingToken}`, null);
     if (!pending || pending.type !== "signup" || pending.expires < Date.now()) return bad("Setup expired — start again.", 410);
-    const ok = method === "sms"
-      ? safeEqual(String(code).trim(), pending.smsCode)
-      : verifyTotp(pending.account.totpSecret, code);
+    const ok = verifyTotp(pending.account.totpSecret, code);
     if (!ok) return bad("That code didn't match. Try again.", 401);
-    const account = { ...pending.account, twofa: method === "sms" ? "sms" : "totp" };
+    const account = { ...pending.account, twofa: "totp" };
     const accounts = await getAccounts();
     if (findAccount(accounts, account.email)) return bad("An account with that email already exists.");
     await saveAccounts([...accounts, account]);
+    if (pending.inviteToken) {
+      const inv = await readJson(`gs:admininvite:${pending.inviteToken}`, null);
+      if (inv) { inv.usedAt = new Date().toISOString(); inv.usedBy = account.email; await writeJson(`gs:admininvite:${pending.inviteToken}`, inv); }
+    }
     await store().delete(`auth:pending:${pendingToken}`);
     const token = await createSession(account);
     return json({ session: token, account: publicAccount(account) });
@@ -383,14 +393,10 @@ async function handleAuth(req, path, body) {
     if (!account || account.role !== role) return bad("No account found with that email.", 401);
     if (!safeEqual(hashPassword(password || "", account.salt), account.hash)) return bad("Incorrect password.", 401);
     const pendingToken = randomToken();
-    const smsCode = sixDigits();
     await writeJson(`auth:pending:${pendingToken}`, {
-      type: "login", email: account.email, smsCode, expires: Date.now() + 10 * 60 * 1000,
+      type: "login", email: account.email, expires: Date.now() + 10 * 60 * 1000,
     });
-    return json({
-      pendingToken, twofa: account.twofa,
-      ...(DEMO_MODE ? { demoSms: smsCode, demoTotpSecret: account.totpSecret } : {}),
-    });
+    return json({ pendingToken, twofa: "totp" });
   }
 
   /* ---- login step 2: 2FA ---- */
@@ -401,9 +407,7 @@ async function handleAuth(req, path, body) {
     const accounts = await getAccounts();
     const account = findAccount(accounts, pending.email);
     if (!account) return bad("Account not found.", 401);
-    const ok = method === "sms"
-      ? safeEqual(String(code).trim(), pending.smsCode)
-      : verifyTotp(account.totpSecret, code);
+    const ok = verifyTotp(account.totpSecret, code);
     if (!ok) return bad("That code didn't match. Try again.", 401);
     await store().delete(`auth:pending:${pendingToken}`);
     const token = await createSession(account);
@@ -417,23 +421,20 @@ async function handleAuth(req, path, body) {
     const account = findAccount(accounts, email);
     if (!account || account.role !== role) return bad("No account found with that email.", 404);
     const pendingToken = randomToken();
-    const smsCode = sixDigits();
+    const emailCode = sixDigits();
     await writeJson(`auth:pending:${pendingToken}`, {
-      type: "reset", email: account.email, smsCode, expires: Date.now() + 10 * 60 * 1000,
+      type: "reset", email: account.email, emailCode, expires: Date.now() + 10 * 60 * 1000,
     });
     let emailSent = false;
     if (RESEND_KEY) {
       const result = await sendEmail(account.email, "Your password reset code", `
         <p>Hi ${esc(account.name.split(" ")[0])},</p>
         <p>Use this code to reset your Guardian Shield Training password. It expires in 10 minutes.</p>
-        <p style="background:#242017;border:1px solid #C9A45C;padding:14px 16px;text-align:center;font-family:Courier,monospace;font-size:24px;color:#E3CD96;letter-spacing:6px;">${smsCode}</p>
+        <p style="background:#242017;border:1px solid #C9A45C;padding:14px 16px;text-align:center;font-family:Courier,monospace;font-size:24px;color:#E3CD96;letter-spacing:6px;">${emailCode}</p>
         <p>If you didn't request this, you can safely ignore this email — your password is unchanged.</p>`);
       emailSent = !result.error && !result.skipped;
     }
-    return json({
-      pendingToken, twofa: account.twofa, emailSent,
-      ...(DEMO_MODE ? { demoSms: smsCode, demoTotpSecret: account.totpSecret } : {}),
-    });
+    return json({ pendingToken, twofa: "totp", emailSent });
   }
 
   /* ---- password reset, step 2: prove identity with 2FA, set new password ---- */
@@ -445,8 +446,8 @@ async function handleAuth(req, path, body) {
     const accounts = await getAccounts();
     const account = findAccount(accounts, pending.email);
     if (!account) return bad("Account not found.", 404);
-    const ok = method === "sms"
-      ? safeEqual(String(code).trim(), pending.smsCode)
+    const ok = (method === "email" || method === "sms")
+      ? safeEqual(String(code).trim(), pending.emailCode || pending.smsCode)
       : verifyTotp(account.totpSecret, code);
     if (!ok) return bad("That code didn't match. Try again.", 401);
     account.salt = newSalt();
@@ -477,6 +478,36 @@ async function handleAuth(req, path, body) {
     account.hash = hashPassword(newPassword, account.salt);
     await saveAccounts(accounts);
     return json({ ok: true });
+  }
+
+  /* ---- admin: invite another administrator ---- */
+  if (path === "send-admin-invite") {
+    const sess = await getSession(req);
+    if (!sess || sess.role !== "admin") return bad("Admin access required.", 403);
+    const { name, email } = body;
+    if (!/@/.test(email || "")) return bad("Enter a valid email address.");
+    const accounts = await getAccounts();
+    if (findAccount(accounts, email)) return bad("An account with that email already exists.");
+    const token = randomToken();
+    await writeJson(`gs:admininvite:${token}`, {
+      name: (name || "").trim(), email: email.trim(),
+      invitedBy: sess.email, createdAt: new Date().toISOString(),
+      expires: Date.now() + 7 * 24 * 60 * 60 * 1000,
+    });
+    const inviteUrl = `https://guardianshield.training/?view=admin&invite=${token}`;
+    let emailSent = false;
+    if (RESEND_KEY) {
+      const result = await sendEmail(email.trim(), "You're invited to administer Guardian Shield Training", `
+        <p>Hi ${esc((name || "there").split(" ")[0])},</p>
+        <p><strong>${esc(sess.name || sess.email)}</strong> has invited you to become an administrator of the Guardian Shield Training platform.</p>
+        <p>Use the button below to create your admin account. You'll set a password and add the account to an authenticator app for two-factor sign-in.</p>
+        <p style="text-align:center;margin:22px 0;">
+          <a href="${inviteUrl}" style="background:#C9A45C;color:#1A1509;font-weight:700;padding:13px 26px;text-decoration:none;letter-spacing:0.04em;">Create your admin account &rarr;</a>
+        </p>
+        <p style="font-size:13px;color:#A99F86;">This invitation is for ${esc(email.trim())} only and expires in 7 days. If you weren't expecting it, you can ignore this email.</p>`);
+      emailSent = !result.error && !result.skipped;
+    }
+    return json({ ok: true, emailSent, inviteUrl });
   }
 
   /* ---- admin: update an account's details ---- */
@@ -689,6 +720,7 @@ async function handleCheckPasscode(url) {
 async function handleApply(body) {
   const { name, company, email, phone, background, resumeName, resumeDataUrl } = body;
   if (!name?.trim() || !/@/.test(email || "") || !background?.trim()) return bad("Name, email, and background are required.");
+  if (String(phone || "").replace(/\D/g, "").length < 10) return bad("A mobile phone number is required.");
   const id = uid();
   if (resumeDataUrl) {
     if (!resumeDataUrl.startsWith("data:application/pdf")) return bad("Resume must be a PDF.");

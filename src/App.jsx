@@ -117,6 +117,8 @@ function compressImageFile(file, maxDim = 900, quality = 0.72) {
   });
 }
 
+const phoneOk = (p) => String(p || "").replace(/\D/g, "").length >= 10;
+
 function isDirectVideoFile(url) {
   return /\.(mp4|webm|ogv|mov|m4v)(\?|#|$)/i.test(String(url || "").trim());
 }
@@ -440,16 +442,19 @@ export default function App() {
   // Returning from Stripe checkout (?reg=success|cancel)
   const [stripeReturn, setStripeReturn] = useState(null);
   const [signToken, setSignToken] = useState(null);
+  const [adminInvite, setAdminInvite] = useState(null);
   useEffect(() => {
     let q;
     try { q = new URLSearchParams(window.location.search); } catch (e) { return; }
     const reg = q.get("reg");
     const deepView = q.get("view");
     const signTok = q.get("sign");
-    if (!reg && !deepView && !signTok) return;
+    const invTok = q.get("invite");
+    if (!reg && !deepView && !signTok && !invTok) return;
     try { window.history.replaceState({}, "", window.location.pathname); } catch (e) {}
     const VALID_VIEWS = ["home", "product", "training", "schedule", "about", "verify", "instructor", "portal", "admin"];
     if (signTok && signTok.length >= 10) { setSignToken(signTok); setView("sign"); }
+    if (invTok && invTok.length >= 10) { setAdminInvite(invTok); setView("admin"); }
     if (deepView && VALID_VIEWS.includes(deepView)) setView(deepView);
     if (!reg) return;
     if (reg === "cancel") { setStripeReturn({ status: "cancel" }); return; }
@@ -582,7 +587,7 @@ export default function App() {
             <AdminPortal
               user={adminUser} setUser={setAdminUser} instrAccounts={accounts}
               accounts={adminAccounts} updateAccounts={updateAdminAccounts}
-              media={media} updateMedia={updateMedia} go={setView}
+              media={media} updateMedia={updateMedia} go={setView} inviteToken={adminInvite}
             />
           )}
           {view === "training" && <Training go={setView} media={media} />}
@@ -1429,7 +1434,7 @@ function RegisterModal({ cls, onClose, onComplete, onRemoteComplete, codes = [],
   const [passErr, setPassErr] = useState(null);
   const [payErr, setPayErr] = useState(null);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value });
-  const infoValid = f.name.trim() && /@/.test(f.email) && f.waiver;
+  const infoValid = f.name.trim() && /@/.test(f.email) && phoneOk(f.phone) && f.waiver;
 
   const validatePasscode = async () => {
     if (!isInstructorClass) return true;
@@ -1544,8 +1549,12 @@ function RegisterModal({ cls, onClose, onComplete, onRemoteComplete, codes = [],
             </div>
           )}
           <Field label="Full name" value={f.name} onChange={set("name")} placeholder="Jordan Whitfield" />
-          <Field label="Email" value={f.email} onChange={set("email")} placeholder="you@example.com" type="email" />
-          <Field label="Phone" type="tel" value={f.phone} onChange={set("phone")} placeholder="999-999-9999" autoComplete="tel" inputMode="tel" />
+          <Field label="Email (required)" value={f.email} onChange={set("email")} placeholder="you@example.com" type="email" />
+          <Field label="Mobile phone (required)" type="tel" value={f.phone} onChange={set("phone")} placeholder="999-999-9999" autoComplete="tel" inputMode="tel" />
+          {f.phone.trim() !== "" && !phoneOk(f.phone) && (
+            <div style={{ ...mono, fontSize: 12, color: C.warn }}>Please enter a full mobile number, e.g. 801-555-0123.</div>
+          )}
+          <div style={{ ...mono, fontSize: 11, color: C.muted }}>Your email and mobile number are required for registration confirmation and class reminders.</div>
           {isInstructorClass && (
             <Field label="Company (optional)" value={f.company} onChange={set("company")} placeholder="Your company or agency" />
           )}
@@ -1688,7 +1697,7 @@ function InstructorApply({ apps, updateApps, go, classes }) {
   const [resume, setResume] = useState(null);      // { name, dataUrl }
   const [resumeErr, setResumeErr] = useState(null);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
-  const valid = f.name.trim() && /@/.test(f.email) && f.background.trim();
+  const valid = f.name.trim() && /@/.test(f.email) && phoneOk(f.phone) && f.background.trim();
 
   const attachResume = (e) => {
     const file = e.target.files && e.target.files[0];
@@ -1764,7 +1773,10 @@ function InstructorApply({ apps, updateApps, go, classes }) {
               <Field label="Full name" value={f.name} onChange={set("name")} />
               <Field label="Company (optional)" value={f.company} onChange={set("company")} placeholder="Your company or agency" />
               <Field label="Email" value={f.email} onChange={set("email")} type="email" />
-              <Field label="Phone" type="tel" value={f.phone} onChange={set("phone")} placeholder="999-999-9999" autoComplete="tel" inputMode="tel" />
+              <Field label="Mobile phone (required)" type="tel" value={f.phone} onChange={set("phone")} placeholder="999-999-9999" autoComplete="tel" inputMode="tel" />
+              {f.phone.trim() !== "" && !phoneOk(f.phone) && (
+                <div style={{ ...mono, fontSize: 12, color: C.warn }}>Please enter a full mobile number, e.g. 801-555-0123.</div>
+              )}
               <div>
                 <FieldLabel>Training / professional background</FieldLabel>
                 <textarea value={f.background} onChange={set("background")} rows={5}
@@ -1800,31 +1812,8 @@ function InstructorApply({ apps, updateApps, go, classes }) {
 /* ============================================================
    INSTRUCTOR PORTAL
    ============================================================ */
-function DemoTotpHelper({ secret }) {
-  const [code, setCode] = useState("······");
-  const [left, setLeft] = useState(30);
-  useEffect(() => {
-    let alive = true;
-    const tick = async () => {
-      const now = Date.now();
-      const c = await totpAt(secret, Math.floor(now / 30000));
-      if (alive) { setCode(c); setLeft(30 - Math.floor((now / 1000) % 30)); }
-    };
-    tick();
-    const iv = setInterval(tick, 1000);
-    return () => { alive = false; clearInterval(iv); };
-  }, [secret]);
-  return (
-    <div style={{ background: "#2A2415", border: `1px dashed ${C.bronzeDark}`, padding: "10px 12px", fontSize: 13, color: C.muted }}>
-      <strong style={{ color: C.bronzeLight }}>Demo-only helper</strong> (remove for production): the current valid authenticator code is{" "}
-      <span style={{ ...mono, color: C.bronzeLight, fontSize: 16, letterSpacing: "0.1em" }}>{code}</span>
-      <span style={{ ...mono, fontSize: 11 }}> · refreshes in {left}s</span>
-    </div>
-  );
-}
-
-function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", roleName = "Instructor", keyLabel = "Instructor enrollment key", keyHint = "Issued after certification" }) {
-  const [mode, setMode] = useState("signin"); // signin | signup | totp-setup | challenge
+function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", roleName = "Instructor", keyLabel = "Instructor enrollment key", keyHint = "Issued after certification", inviteToken = null }) {
+  const [mode, setMode] = useState(inviteToken ? "signup" : "signin"); // signin | signup | totp-setup | challenge
   const [err, setErr] = useState(null);
   const [busy, setBusy] = useState(false);
 
@@ -1835,8 +1824,7 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
   // 2FA state
   const [pending, setPending] = useState(null);       // account awaiting 2FA (setup or challenge)
   const [twofaCode, setTwofaCode] = useState("");
-  const [smsMode, setSmsMode] = useState(false);      // using text code instead of authenticator
-  const [smsSent, setSmsSent] = useState(null);       // the demo "texted" code
+  const [emailCodeMode, setEmailCodeMode] = useState(false); // reset flow: verify with the emailed code
   // password reset
   const [rs, setRs] = useState({ email: "", pw: "", pw2: "" });
   const [resetDone, setResetDone] = useState(false);
@@ -1849,10 +1837,9 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
     setErr(null); setBusy(true);
     try {
       const r = await apiPost("auth/login", { role, email: si.email, password: si.password });
-      setPending({ remote: true, token: r.pendingToken, email: si.email.trim(), twofa: r.twofa, demoSms: r.demoSms, totpSecret: r.demoTotpSecret });
+      setPending({ remote: true, token: r.pendingToken, email: si.email.trim() });
       setTwofaCode("");
-      if (r.twofa === "sms") { setSmsSent(r.demoSms || null); setSmsMode(true); }
-      else { setSmsMode(false); setSmsSent(null); }
+      setEmailCodeMode(false);
       setMode("challenge");
     } catch (e) {
       if (!e.local) { setErr(e.message); setBusy(false); return; }
@@ -1863,8 +1850,7 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
       if (hash !== acct.passHash) { setErr("Incorrect password."); setBusy(false); return; }
       setPending(acct);
       setTwofaCode("");
-      if (acct.twofa === "sms") { const c = sixDigits(); setSmsSent(c); setSmsMode(true); }
-      else { setSmsMode(false); setSmsSent(null); }
+      setEmailCodeMode(false);
       setMode("challenge");
     }
     setBusy(false);
@@ -1881,10 +1867,10 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
     try {
       const r = await apiPost("auth/signup", {
         role, name, company: su.company, email: su.email, phone: su.phone,
-        password: su.password, enrollKey: su.key,
+        password: su.password, enrollKey: su.key, inviteToken,
       });
-      setPending({ remote: true, token: r.pendingToken, email: su.email.trim(), totpSecret: r.totpSecret, demoSms: r.demoSms });
-      setTwofaCode(""); setSmsMode(false); setSmsSent(null);
+      setPending({ remote: true, token: r.pendingToken, email: su.email.trim(), totpSecret: r.totpSecret });
+      setTwofaCode(""); setEmailCodeMode(false);
       setMode("totp-setup");
     } catch (e) {
       if (!e.local) { setErr(e.message); setBusy(false); return; }
@@ -1898,7 +1884,7 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
         phone: su.phone.trim(), salt, passHash,
         totpSecret: makeTotpSecret(), twofa: "totp", created: new Date().toISOString().slice(0, 10),
       });
-      setTwofaCode(""); setSmsMode(false); setSmsSent(null);
+      setTwofaCode(""); setEmailCodeMode(false);
       setMode("totp-setup");
     }
     setBusy(false);
@@ -1908,19 +1894,17 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
     setErr(null); setBusy(true);
     if (pending.remote) {
       try {
-        const r = await apiPost("auth/verify-setup", { pendingToken: pending.token, code: twofaCode, method: smsMode ? "sms" : "totp" });
+        const r = await apiPost("auth/verify-setup", { pendingToken: pending.token, code: twofaCode, method: "totp" });
         setAuthToken(r.session);
         setBusy(false);
         onSignedIn(r.account);
       } catch (e) { setBusy(false); setErr(e.local ? "Connection lost — try again." : e.message); }
       return;
     }
-    let ok;
-    if (smsMode) ok = twofaCode.trim() === smsSent;
-    else ok = await verifyTotp(pending.totpSecret, twofaCode);
+    const ok = await verifyTotp(pending.totpSecret, twofaCode);
     setBusy(false);
     if (!ok) return setErr("That code didn't match. Try again.");
-    const acct = { ...pending, twofa: smsMode ? "sms" : "totp" };
+    const acct = { ...pending, twofa: "totp" };
     await updateAccounts([...accounts, acct]);
     onSignedIn(acct);
   };
@@ -1929,16 +1913,14 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
     setErr(null); setBusy(true);
     if (pending.remote) {
       try {
-        const r = await apiPost("auth/verify-login", { pendingToken: pending.token, code: twofaCode, method: smsMode ? "sms" : "totp" });
+        const r = await apiPost("auth/verify-login", { pendingToken: pending.token, code: twofaCode, method: "totp" });
         setAuthToken(r.session);
         setBusy(false);
         onSignedIn(r.account);
       } catch (e) { setBusy(false); setErr(e.local ? "Connection lost — try again." : e.message); }
       return;
     }
-    let ok;
-    if (smsMode) ok = twofaCode.trim() === smsSent;
-    else ok = await verifyTotp(pending.totpSecret, twofaCode);
+    const ok = await verifyTotp(pending.totpSecret, twofaCode);
     setBusy(false);
     if (!ok) return setErr("That code didn't match. Try again.");
     onSignedIn(pending);
@@ -1948,9 +1930,9 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
     setErr(null); setBusy(true);
     try {
       const r = await apiPost("auth/reset-start", { role, email: rs.email });
-      setPending({ remote: true, reset: true, token: r.pendingToken, email: rs.email.trim(), twofa: r.twofa, demoSms: r.demoSms, totpSecret: r.demoTotpSecret, emailSent: r.emailSent });
+      setPending({ remote: true, reset: true, token: r.pendingToken, email: rs.email.trim(), emailSent: r.emailSent });
       setTwofaCode("");
-      if (r.emailSent || r.twofa === "sms") { setSmsSent(r.demoSms || null); setSmsMode(true); } else { setSmsMode(false); setSmsSent(null); }
+      setEmailCodeMode(!!r.emailSent);
       setMode("reset-finish");
     } catch (e) {
       if (!e.local) { setErr(e.message); setBusy(false); return; }
@@ -1959,7 +1941,7 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
       if (!acct) { setErr("No account found with that email."); setBusy(false); return; }
       setPending({ ...acct, resetLocal: true });
       setTwofaCode("");
-      if (acct.twofa === "sms") { const c = sixDigits(); setSmsSent(c); setSmsMode(true); } else { setSmsMode(false); setSmsSent(null); }
+      setEmailCodeMode(false);
       setMode("reset-finish");
     }
     setBusy(false);
@@ -1972,15 +1954,13 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
     setBusy(true);
     if (pending.remote) {
       try {
-        await apiPost("auth/reset-complete", { pendingToken: pending.token, code: twofaCode, method: smsMode ? "sms" : "totp", newPassword: rs.pw });
+        await apiPost("auth/reset-complete", { pendingToken: pending.token, code: twofaCode, method: emailCodeMode ? "email" : "totp", newPassword: rs.pw });
         setBusy(false); setResetDone(true); setRs({ email: "", pw: "", pw2: "" }); setMode("signin");
       } catch (e) { setBusy(false); setErr(e.local ? "Connection lost — try again." : e.message); }
       return;
     }
     // ---- local fallback ----
-    let ok;
-    if (smsMode) ok = twofaCode.trim() === smsSent;
-    else ok = await verifyTotp(pending.totpSecret, twofaCode);
+    const ok = await verifyTotp(pending.totpSecret, twofaCode);
     if (!ok) { setBusy(false); return setErr("That code didn't match. Try again."); }
     const salt = uid() + uid();
     const passHash = await hashPassword(rs.pw, salt);
@@ -1988,18 +1968,7 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
     setBusy(false); setResetDone(true); setRs({ email: "", pw: "", pw2: "" }); setMode("signin");
   };
 
-  const sendSms = () => { const c = (pending && pending.demoSms) || sixDigits(); setSmsSent(c); setSmsMode(true); setTwofaCode(""); setErr(null); };
-  const useAuthApp = () => { setSmsMode(false); setSmsSent(null); setTwofaCode(""); setErr(null); };
-
   const secretGroups = pending?.totpSecret ? pending.totpSecret.match(/.{1,4}/g).join(" ") : "";
-
-  const SmsDemoBox = () =>
-    smsSent ? (
-      <div style={{ background: C.panel2, border: `1px dashed ${C.line}`, padding: "10px 12px", fontSize: 13, color: C.muted }}>
-        <strong style={{ color: C.bronzeLight }}>Demo text message</strong> to {pending?.phone || "your phone"}: your Guardian verification code is{" "}
-        <span style={{ ...mono, color: C.bronzeLight, fontSize: 15 }}>{smsSent}</span>. In production this is sent by SMS (e.g. via Twilio) and never shown on screen.
-      </div>
-    ) : null;
 
   return (
     <div style={{ maxWidth: 460, margin: "0 auto", padding: "64px 20px 0" }}>
@@ -2033,6 +2002,11 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
 
         {mode === "signup" && (
           <>
+            {inviteToken && (
+              <div style={{ ...mono, fontSize: 12, color: C.ok, background: "#1C2A21", border: `1px solid ${C.ok}`, padding: "10px 12px", lineHeight: 1.6 }}>
+                You've been invited to become an administrator. Create your account below using the email address the invitation was sent to — no enrollment key needed.
+              </div>
+            )}
             <Field label="Full name" value={su.name} onChange={(e) => setSu({ ...su, name: e.target.value })} placeholder="Aaron Whitfield" autoComplete="name" />
             <Field label="Company name (optional)" value={su.company} onChange={(e) => setSu({ ...su, company: e.target.value })} placeholder="e.g. Wasatch Defense Training LLC" autoComplete="organization" />
             <div className="gs-row-2">
@@ -2043,7 +2017,7 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
               <Field label="Password (8+ chars)" type="password" value={su.password} onChange={(e) => setSu({ ...su, password: e.target.value })} autoComplete="new-password" />
               <Field label="Confirm password" type="password" value={su.confirm} onChange={(e) => setSu({ ...su, confirm: e.target.value })} autoComplete="new-password" />
             </div>
-            <Field label={keyLabel} value={su.key} onChange={(e) => setSu({ ...su, key: e.target.value })} mono placeholder={keyHint} />
+            {!inviteToken && <Field label={keyLabel} value={su.key} onChange={(e) => setSu({ ...su, key: e.target.value })} mono placeholder={keyHint} />}
             {err && <div style={{ ...mono, fontSize: 12, color: C.warn, lineHeight: 1.5 }}>{err}</div>}
             <Btn onClick={startSignUp} disabled={busy}>{busy ? "Creating…" : "Create account"}</Btn>
             <button onClick={() => { setMode("signin"); setErr(null); }} style={{ background: "none", border: "none", color: C.bronze, cursor: "pointer", fontSize: 14, padding: 0 }}>
@@ -2054,48 +2028,29 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
 
         {mode === "totp-setup" && (
           <>
-            {!smsMode ? (
-              <>
-                <p style={{ fontSize: 14, color: C.muted, lineHeight: 1.6, margin: 0 }}>
-                  Add this account to an authenticator app (Google Authenticator, Authy, 1Password…): create a new <strong style={{ color: C.text }}>time-based</strong> entry for <strong style={{ color: C.text }}>{pending.email}</strong> with this setup key:
-                </p>
-                <div style={{ ...mono, fontSize: 16, letterSpacing: "0.08em", color: C.bronzeLight, background: C.panel2, border: `1px solid ${C.line}`, padding: "12px 14px", textAlign: "center", userSelect: "all" }}>
-                  {secretGroups}
-                </div>
-                <Field label="Enter the 6-digit code from your app" value={twofaCode} onChange={(e) => setTwofaCode(e.target.value)} mono placeholder="000000" />
-                {pending.totpSecret && <DemoTotpHelper secret={pending.totpSecret} />}
-              </>
-            ) : (
-              <>
-                <SmsDemoBox />
-                <Field label="Enter the 6-digit code we texted you" value={twofaCode} onChange={(e) => setTwofaCode(e.target.value)} mono placeholder="000000" />
-              </>
-            )}
+            <p style={{ fontSize: 14, color: C.muted, lineHeight: 1.6, margin: 0 }}>
+              Add this account to an authenticator app (Google Authenticator, Authy, 1Password…): create a new <strong style={{ color: C.text }}>time-based</strong> entry for <strong style={{ color: C.text }}>{pending.email}</strong> with this setup key:
+            </p>
+            <div style={{ ...mono, fontSize: 16, letterSpacing: "0.08em", color: C.bronzeLight, background: C.panel2, border: `1px solid ${C.line}`, padding: "12px 14px", textAlign: "center", userSelect: "all" }}>
+              {secretGroups}
+            </div>
+            <Field label="Enter the 6-digit code from your app" value={twofaCode} onChange={(e) => setTwofaCode(e.target.value)} mono placeholder="000000" />
             {err && <div style={{ ...mono, fontSize: 12, color: C.warn }}>{err}</div>}
             <Btn onClick={finishSetup} disabled={busy || twofaCode.trim().length !== 6}>{busy ? "Verifying…" : "Verify & finish"}</Btn>
-            <button onClick={smsMode ? useAuthApp : sendSms} style={{ background: "none", border: "none", color: C.bronze, cursor: "pointer", fontSize: 14, padding: 0 }}>
-              {smsMode ? "Use an authenticator app instead" : "Use text message codes instead"}
-            </button>
+            <div style={{ ...mono, fontSize: 11, color: C.muted, lineHeight: 1.6 }}>
+              Keep this app entry — you'll enter a code from it every time you sign in.
+            </div>
           </>
         )}
 
         {mode === "challenge" && (
           <>
             <p style={{ fontSize: 14, color: C.muted, margin: 0 }}>
-              Signed in as <strong style={{ color: C.text }}>{pending.email}</strong>. One more step:
+              Signed in as <strong style={{ color: C.text }}>{pending.email}</strong>. Enter the 6-digit code from your authenticator app.
             </p>
-            {smsMode ? <SmsDemoBox /> : (
-              <>
-                <p style={{ fontSize: 14, color: C.muted, margin: 0 }}>Enter the 6-digit code from your authenticator app.</p>
-                {pending.totpSecret && <DemoTotpHelper secret={pending.totpSecret} />}
-              </>
-            )}
             <Field label="6-digit code" value={twofaCode} onChange={(e) => setTwofaCode(e.target.value)} mono placeholder="000000" />
             {err && <div style={{ ...mono, fontSize: 12, color: C.warn }}>{err}</div>}
             <Btn onClick={finishChallenge} disabled={busy || twofaCode.trim().length !== 6}>{busy ? "Verifying…" : "Verify & sign in"}</Btn>
-            <button onClick={smsMode ? useAuthApp : sendSms} style={{ background: "none", border: "none", color: C.bronze, cursor: "pointer", fontSize: 14, padding: 0 }}>
-              {smsMode ? "Use my authenticator app instead" : "Text a code to my phone instead"}
-            </button>
             <button onClick={() => { setMode("signin"); setPending(null); setErr(null); }} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 13, padding: 0 }}>
               ← Start over
             </button>
@@ -2118,18 +2073,10 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
 
         {mode === "reset-finish" && (
           <>
-            {smsMode ? (
-              pending.emailSent ? (
-                <>
-                  <p style={{ fontSize: 14, color: C.muted, margin: 0 }}>We emailed a 6-digit code to <strong style={{ color: C.text }}>{pending.email}</strong>. Enter it below — it expires in 10 minutes.</p>
-                  {smsSent && <SmsDemoBox />}
-                </>
-              ) : <SmsDemoBox />
+            {emailCodeMode ? (
+              <p style={{ fontSize: 14, color: C.muted, margin: 0 }}>We emailed a 6-digit code to <strong style={{ color: C.text }}>{pending.email}</strong>. Enter it below — it expires in 10 minutes.</p>
             ) : (
-              <>
-                <p style={{ fontSize: 14, color: C.muted, margin: 0 }}>Enter the 6-digit code from your authenticator app for <strong style={{ color: C.text }}>{pending.email}</strong>.</p>
-                {pending.totpSecret && <DemoTotpHelper secret={pending.totpSecret} />}
-              </>
+              <p style={{ fontSize: 14, color: C.muted, margin: 0 }}>Enter the 6-digit code from your authenticator app for <strong style={{ color: C.text }}>{pending.email}</strong>.</p>
             )}
             <Field label="6-digit code" value={twofaCode} onChange={(e) => setTwofaCode(e.target.value)} mono placeholder="000000" />
             <div className="gs-row-2">
@@ -2138,9 +2085,11 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
             </div>
             {err && <div style={{ ...mono, fontSize: 12, color: C.warn }}>{err}</div>}
             <Btn onClick={completeReset} disabled={busy || twofaCode.trim().length !== 6 || !rs.pw}>{busy ? "Updating…" : "Set new password"}</Btn>
-            <button onClick={smsMode ? useAuthApp : sendSms} style={{ background: "none", border: "none", color: C.bronze, cursor: "pointer", fontSize: 14, padding: 0 }}>
-              {smsMode ? "Use my authenticator app instead" : "Text a code to my phone instead"}
-            </button>
+            {pending.emailSent && (
+              <button onClick={() => { setEmailCodeMode(!emailCodeMode); setTwofaCode(""); setErr(null); }} style={{ background: "none", border: "none", color: C.bronze, cursor: "pointer", fontSize: 14, padding: 0 }}>
+                {emailCodeMode ? "Use my authenticator app instead" : "Use the emailed code instead"}
+              </button>
+            )}
             <button onClick={() => { setMode("signin"); setPending(null); setErr(null); }} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 13, padding: 0 }}>
               ← Cancel
             </button>
@@ -2148,7 +2097,7 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
         )}
 
         <div style={{ ...mono, fontSize: 11, color: C.muted, lineHeight: 1.6, borderTop: `1px solid ${C.line}`, paddingTop: 10 }}>
-          Demo authentication: passwords are salted &amp; hashed in local storage and authenticator codes are real TOTP, but production should use a managed auth service (Auth0, Clerk, Supabase Auth…) with server-side accounts and real SMS delivery.
+          Accounts are protected with salted password hashing and authenticator-app (TOTP) two-factor verification. Keep your authenticator entry safe — it's required to sign in.
         </div>
       </div>
     </div>
@@ -3570,7 +3519,7 @@ function RosterPrintModal({ cls, onClose }) {
 /* ============================================================
    ADMIN PORTAL — manage The Product page media
    ============================================================ */
-function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = [], media, updateMedia, go }) {
+function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = [], media, updateMedia, go, inviteToken = null }) {
   const [tab, setTab] = useState("photos");
   const [d, setD] = useState({ classes: [], certs: [], accounts: [], payments: [], settings: { commissionRate: 20 } });
 
@@ -3598,7 +3547,7 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
 
   if (!user) {
     return <AuthGate accounts={accounts} updateAccounts={updateAccounts} onSignedIn={setUser}
-      enrollKey="ADMIN" roleName="Admin" keyLabel="Admin enrollment key" keyHint="Issued to site administrators" />;
+      enrollKey="ADMIN" roleName="Admin" keyLabel="Admin enrollment key" keyHint="Issued to site administrators" inviteToken={inviteToken} />;
   }
 
   const firstName = (user.name || "").trim().split(/\s+/)[0] || "admin";
@@ -3885,8 +3834,96 @@ function AdminPrintModal({ title, subtitle, columns, rows, footerNote, onClose }
 function AdminUsers({ certs, saveCerts, accounts, refresh }) {
   return (
     <div style={{ display: "grid", gap: 36 }}>
+      <InstructorAccounts accounts={accounts} />
       <UserList title="Certified Instructors" all={certs} saveCerts={saveCerts} accounts={accounts} type="instructor" />
-      <UserList title="Certified Students" all={certs} saveCerts={saveCerts} accounts={accounts} type="standard" />
+      <UserList title="Graduated Students" all={certs} saveCerts={saveCerts} accounts={accounts} type="standard" />
+    </div>
+  );
+}
+
+/* ---------- all approved instructors (portal accounts), certified or not ---------- */
+function InstructorAccounts({ accounts }) {
+  const rows = (accounts || []).filter((a) => a.role === "instructor");
+  const [sort, setSort] = useState({ key: "name", dir: "asc" });
+  const [msg, setMsg] = useState(null);
+  const [docView, setDocView] = useState(null);
+
+  const sorted = [...rows].sort((a, b) => {
+    const va = String(a[sort.key] ?? "").toLowerCase(), vb = String(b[sort.key] ?? "").toLowerCase();
+    const cmp = va < vb ? -1 : va > vb ? 1 : 0;
+    return sort.dir === "asc" ? cmp : -cmp;
+  });
+  const clickSort = (key) => setSort((s) => (s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" }));
+
+  const resetPassword = async (a) => {
+    const temp = "GS-" + uid() + uid().slice(0, 4);
+    try {
+      await apiPost("auth/admin-set-password", { email: a.email, newPassword: temp });
+      setMsg({ email: a.email, ok: true, text: `Temporary password for ${a.email}: ${temp} — share it securely. They sign in with it plus their authenticator app, then should change it via "Forgot password".` });
+    } catch (e) { setMsg({ email: a.email, ok: false, text: e.local ? "Account management isn't available in preview mode." : e.message }); }
+  };
+
+  const smallBtn = { ...mono, fontSize: 11, background: "none", border: `1px solid ${C.bronzeDark}`, color: C.bronze, padding: "4px 8px", cursor: "pointer", borderRadius: 2, whiteSpace: "nowrap" };
+  const COLS = [["name", "NAME"], ["company", "COMPANY"], ["email", "EMAIL"], ["phone", "PHONE"], ["agreement", "AGREEMENT"], ["w9", "W-9"], ["created", "JOINED"]];
+
+  return (
+    <div>
+      <div style={{ ...display, fontWeight: 700, fontSize: 20, textTransform: "uppercase", color: C.bronzeLight }}>Instructor Accounts <span style={{ ...mono, fontSize: 12, color: C.muted }}>({rows.length})</span></div>
+      <p style={{ color: C.muted, fontSize: 13, lineHeight: 1.6, margin: "6px 0 12px", maxWidth: 720 }}>
+        Every approved instructor with a portal account — including those who haven't completed the certification course yet. Reset a password here if an instructor is locked out.
+      </p>
+      {rows.length === 0 ? (
+        <p style={{ color: C.muted }}>No instructor accounts yet.</p>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, color: C.text }}>
+            <thead>
+              <tr>
+                {COLS.map(([k, label]) => (
+                  <th key={k} onClick={() => clickSort(k)} style={{ ...mono, fontSize: 11, color: C.bronze, letterSpacing: "0.1em", textAlign: "left", padding: "8px 10px", borderBottom: `1px solid ${C.bronzeDark}`, cursor: "pointer", whiteSpace: "nowrap" }}>
+                    {label}{sort.key === k ? (sort.dir === "asc" ? " ↑" : " ↓") : ""}
+                  </th>
+                ))}
+                <th style={{ padding: "8px 10px", borderBottom: `1px solid ${C.bronzeDark}` }} />
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((a) => (
+                <React.Fragment key={a.email}>
+                  <tr>
+                    <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}` }}>{a.name}</td>
+                    <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}` }}>{a.company || "—"}</td>
+                    <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}` }}>{a.email}</td>
+                    <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}` }}>{a.phone || "—"}</td>
+                    <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12 }}>
+                      {a.agreementSignedAt
+                        ? <button onClick={() => setDocView({ kind: "agreement", email: a.email, name: a.name })} style={{ background: "none", border: "none", color: C.ok, cursor: "pointer", fontFamily: "inherit", fontSize: 12, padding: 0, textDecoration: "underline" }}>{"\u2713"} {new Date(a.agreementSignedAt).toLocaleDateString()}</button>
+                        : <span style={{ color: C.warn }}>{"\u2014"}</span>}
+                    </td>
+                    <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12 }}>
+                      {a.w9UploadedAt
+                        ? <button onClick={() => setDocView({ kind: "w9", email: a.email, name: a.name })} style={{ background: "none", border: "none", color: C.ok, cursor: "pointer", fontFamily: "inherit", fontSize: 12, padding: 0, textDecoration: "underline" }}>{"\u2713"} view</button>
+                        : <span style={{ color: C.warn }}>{"\u2014"}</span>}
+                    </td>
+                    <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12 }}>{a.created || "—"}</td>
+                    <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}` }}>
+                      <button onClick={() => resetPassword(a)} style={smallBtn}>Reset password</button>
+                    </td>
+                  </tr>
+                  {msg && msg.email === a.email && (
+                    <tr>
+                      <td colSpan={COLS.length + 1} style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}` }}>
+                        <div style={{ ...mono, fontSize: 12, color: msg.ok ? C.ok : C.warn, background: msg.ok ? "#1C2A21" : "#2E1F16", border: `1px solid ${msg.ok ? C.ok : C.warn}`, padding: "8px 10px" }}>{msg.text}</div>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {docView && <InstructorDocModal doc={docView} onClose={() => setDocView(null)} />}
     </div>
   );
 }
@@ -4062,6 +4099,21 @@ function UserList({ title, all, saveCerts, accounts, type }) {
 function AdminAdmins({ accounts, refresh, currentEmail }) {
   const admins = accounts.filter((a) => a.role === "admin");
   const [sort, setSort] = useState({ key: "name", dir: "asc" });
+  const [inv, setInv] = useState({ name: "", email: "" });
+  const [invBusy, setInvBusy] = useState(false);
+  const [invMsg, setInvMsg] = useState(null);
+
+  const sendInvite = async () => {
+    setInvBusy(true); setInvMsg(null);
+    try {
+      const r = await apiPost("auth/send-admin-invite", { name: inv.name, email: inv.email });
+      setInvMsg(r.emailSent
+        ? { ok: true, text: `Invitation emailed to ${inv.email}. It expires in 7 days and works once.` }
+        : { ok: true, text: `Invitation created, but the email couldn't be sent. Share this link with them directly (expires in 7 days): ${r.inviteUrl}` });
+      setInv({ name: "", email: "" });
+    } catch (e) { setInvMsg({ ok: false, text: e.local ? "Invitations require the live site." : e.message }); }
+    setInvBusy(false);
+  };
   const [editingEmail, setEditingEmail] = useState(null);
   const [ef, setEf] = useState({ name: "", company: "", phone: "" });
   const [confirmDel, setConfirmDel] = useState(null);
@@ -4105,6 +4157,19 @@ function AdminAdmins({ accounts, refresh, currentEmail }) {
 
   return (
     <div>
+      <div style={{ background: C.panel, border: `1px solid ${C.line}`, padding: "18px 20px", marginBottom: 24, display: "grid", gap: 10, maxWidth: 560 }}>
+        <div style={{ ...display, fontWeight: 700, fontSize: 18, textTransform: "uppercase", color: C.bronzeLight }}>Invite an administrator</div>
+        <p style={{ color: C.muted, fontSize: 13, lineHeight: 1.6, margin: 0 }}>
+          They'll receive an email with a one-time link to create their own admin account — password and authenticator app included. No enrollment key changes hands.
+        </p>
+        <div className="gs-row-2">
+          <Field label="Name" value={inv.name} onChange={(e) => setInv({ ...inv, name: e.target.value })} placeholder="Jordan Whitfield" />
+          <Field label="Email" type="email" value={inv.email} onChange={(e) => setInv({ ...inv, email: e.target.value })} placeholder="them@example.com" />
+        </div>
+        {invMsg && <div style={{ ...mono, fontSize: 12, color: invMsg.ok ? C.ok : C.warn, lineHeight: 1.6, wordBreak: "break-all" }}>{invMsg.text}</div>}
+        <Btn small onClick={sendInvite} disabled={invBusy || !/@/.test(inv.email)}>{invBusy ? "Sending…" : "Send invitation"}</Btn>
+      </div>
+
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
         <div style={{ ...display, fontWeight: 700, fontSize: 22, textTransform: "uppercase", color: C.bronzeLight }}>Administrator accounts</div>
         <span style={{ ...mono, fontSize: 12, color: C.muted }}>{admins.length} · click headers to sort</span>
