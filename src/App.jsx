@@ -2176,7 +2176,6 @@ function Portal({ user, setUser, reloadData, accounts, updateAccounts, classes, 
     ["create", "Create a class"],
     ["notify", `Notifications${unread ? ` (${unread})` : ""}`],
     ["grads", "Graduate directory"],
-    ["apps", `Instructor applications${unreadApps ? ` (${unreadApps} new)` : ""}`],
     ["requests", `Class requests${unreadReqs ? ` (${unreadReqs} new)` : ""}`],
     ["codes", "Discount codes"],
     ["agreement", "My Agreement"],
@@ -2206,7 +2205,6 @@ function Portal({ user, setUser, reloadData, accounts, updateAccounts, classes, 
         {tab === "create" && <PortalCreate classes={classes} updateClasses={updateClasses} onCreated={() => setTab("classes")} instructorName={instrName} instructorCompany={user.company || ""} />}
         {tab === "notify" && <PortalNotices notices={notices} updateNotices={updateNotices} />}
         {tab === "grads" && <PortalGrads certs={certs} />}
-        {tab === "apps" && <PortalApps apps={apps} updateApps={updateApps} />}
         {tab === "codes" && <PortalCodes codes={codes} updateCodes={updateCodes} instructorName={instrName} />}
         {tab === "agreement" && <PortalAgreement user={user} />}
         {tab === "requests" && <PortalRequests requests={requests} updateRequests={updateRequests} />}
@@ -3575,13 +3573,14 @@ function RosterPrintModal({ cls, onClose }) {
    ============================================================ */
 function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = [], media, updateMedia, go, inviteToken = null }) {
   const [tab, setTab] = useState("photos");
-  const [d, setD] = useState({ classes: [], certs: [], accounts: [], payments: [], settings: { commissionRate: 20 } });
+  const [d, setD] = useState({ classes: [], certs: [], accounts: [], payments: [], settings: { commissionRate: 20 }, apps: [] });
 
   const loadAll = async () => {
     const classes = await loadKey("gs:classes", []);
     const certs = await loadKey("gs:certs", []);
     const payments = await loadKey("gs:payments", []);
     const settings = await loadKey("gs:settings", { commissionRate: 20 });
+    const apps = await loadKey("gs:apps", []);
     let accs = [];
     try { const r = await apiGet("auth/accounts"); accs = r.accounts; }
     catch (e) {
@@ -3590,7 +3589,7 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
         ...(accounts || []).map((a) => ({ role: "admin", name: a.name, company: a.company || "", email: a.email, phone: a.phone || "", twofa: a.twofa, created: a.created })),
       ];
     }
-    setD({ classes, certs, payments, settings, accounts: accs });
+    setD({ classes, certs, payments, settings, accounts: accs, apps });
   };
   useEffect(() => { if (user) loadAll(); }, [user]);
 
@@ -3598,6 +3597,7 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
   const saveClasses = async (next) => { setD((p) => ({ ...p, classes: next })); await saveKey("gs:classes", next); };
   const savePayments = async (next) => { setD((p) => ({ ...p, payments: next })); await saveKey("gs:payments", next); };
   const saveSettings = async (next) => { setD((p) => ({ ...p, settings: next })); await saveKey("gs:settings", next); };
+  const saveApps = async (next) => { setD((p) => ({ ...p, apps: next })); await saveKey("gs:apps", next); };
 
   if (!user) {
     return <AuthGate accounts={accounts} updateAccounts={updateAccounts} onSignedIn={setUser}
@@ -3610,6 +3610,7 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
     ["tphotos", `Training photos (${(media.trainingPhotos || []).length})`],
     ["videos", `Product videos (${media.videos.length})`],
     ["tvideos", `Training videos (${(media.trainingVideos || []).length})`],
+    ["apps", `Applications${(d.apps || []).filter((a) => !a.read).length ? ` (${(d.apps || []).filter((a) => !a.read).length} new)` : ""}`],
     ["users", `Users (${d.certs.length})`],
     ["admins", `Admins (${d.accounts.filter((a) => a.role === "admin").length})`],
     ["report", "Class report"],
@@ -3641,6 +3642,7 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
         {tab === "tphotos" && <AdminPhotos media={media} updateMedia={updateMedia} listKey="trainingPhotos" pageLabel="The Training" />}
         {tab === "videos" && <AdminVideos media={media} updateMedia={updateMedia} />}
         {tab === "tvideos" && <AdminVideos media={media} updateMedia={updateMedia} listKey="trainingVideos" pageLabel="The Training" allowHome={false} />}
+        {tab === "apps" && <PortalApps apps={d.apps || []} updateApps={saveApps} />}
         {tab === "users" && <AdminUsers certs={d.certs} saveCerts={saveCerts} accounts={d.accounts} refresh={loadAll} />}
         {tab === "admins" && <AdminAdmins accounts={d.accounts} refresh={loadAll} currentEmail={user.email} />}
         {tab === "report" && <AdminClassReport classes={d.classes} accounts={d.accounts} />}

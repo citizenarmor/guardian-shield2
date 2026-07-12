@@ -601,15 +601,14 @@ async function handleStorage(req, key, sess) {
   //  - instructors: full app data (classes, certs, apps, notices, codes, requests, resumes)
   //  - admins: media, plus reporting/user-management data (certs, classes, payments, settings)
   const instructorKeys = /^gs:(classes|certs|apps|notices|codes|requests|resume:.+)$/;
-  const adminReadable = ["gs:media", "gs:certs", "gs:classes", "gs:payments", "gs:settings"];
-  const adminWritable = ["gs:media", "gs:certs", "gs:classes", "gs:payments", "gs:settings"];
+  const adminKeys = /^gs:(media|certs|classes|payments|settings|apps|resume:.+)$/;
 
   const canRead = sess.role === "instructor"
     ? key === "gs:media" || instructorKeys.test(key)
-    : adminReadable.includes(key);
+    : adminKeys.test(key);
   const canWrite = sess.role === "instructor"
     ? instructorKeys.test(key)
-    : adminWritable.includes(key);
+    : adminKeys.test(key);
 
   if (method === "GET") {
     if (!canRead) return bad("Access denied for this key.", 403);
@@ -830,7 +829,7 @@ export default async (req) => {
     }
     if (path === "send-approval" && req.method === "POST") {
       const sess = await getSession(url ? req : req);
-      if (!sess || sess.role !== "instructor") return bad("Instructor access required.", 403);
+      if (!sess || sess.role !== "admin") return bad("Admin access required.", 403);
       const apps = await readJson("gs:apps", []);
       const app = apps.find((a) => a.id === body.appId);
       if (!app) return bad("Application not found.", 404);
