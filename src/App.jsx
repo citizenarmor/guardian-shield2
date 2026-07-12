@@ -2725,6 +2725,8 @@ function PortalApps({ apps, updateApps }) {
     pending: { bg: "#2E2718", color: C.bronze, label: "PENDING REVIEW" },
   };
   const markAll = async () => updateApps(apps.map((a) => ({ ...a, read: true })));
+  const [confirmDel, setConfirmDel] = useState(null);
+  const removeApp = async (id) => { await updateApps(apps.filter((a) => a.id !== id)); setConfirmDel(null); };
   const anyUnread = apps.some((a) => !a.read);
   const [viewing, setViewing] = useState(null);   // { name, url, actions }
   const [resumeErr, setResumeErr] = useState(null);
@@ -2826,6 +2828,20 @@ function PortalApps({ apps, updateApps }) {
                       </button>
                       {resumeErr === a.id && <span style={{ ...mono, fontSize: 12, color: C.warn }}>Resume file not found.</span>}
                     </>
+                  )}
+                  {confirmDel === a.id ? (
+                    <>
+                      <button onClick={() => removeApp(a.id)} style={{ ...mono, fontSize: 12, background: C.warn, border: `1px solid ${C.warn}`, color: "#14120D", padding: "5px 10px", cursor: "pointer", borderRadius: 2, fontWeight: 700 }}>
+                        Confirm delete
+                      </button>
+                      <button onClick={() => setConfirmDel(null)} style={{ ...mono, fontSize: 12, background: "none", border: `1px solid ${C.line}`, color: C.muted, padding: "5px 10px", cursor: "pointer", borderRadius: 2 }}>
+                        Keep
+                      </button>
+                    </>
+                  ) : (
+                    <button onClick={() => setConfirmDel(a.id)} style={{ ...mono, fontSize: 12, background: "none", border: `1px solid ${C.line}`, color: C.warn, padding: "5px 10px", cursor: "pointer", borderRadius: 2, marginLeft: "auto" }}>
+                      Delete application
+                    </button>
                   )}
                 </div>
               </div>
@@ -3646,7 +3662,7 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
         {tab === "users" && <AdminUsers certs={d.certs} saveCerts={saveCerts} accounts={d.accounts} refresh={loadAll} />}
         {tab === "admins" && <AdminAdmins accounts={d.accounts} refresh={loadAll} currentEmail={user.email} />}
         {tab === "report" && <AdminClassReport classes={d.classes} accounts={d.accounts} />}
-        {tab === "commissions" && <AdminCommissions classes={d.classes} accounts={d.accounts} payments={d.payments} savePayments={savePayments} saveClasses={saveClasses} settings={d.settings} saveSettings={saveSettings} adminName={user.name} />}
+        {tab === "commissions" && <AdminCommissions classes={d.classes} accounts={d.accounts} payments={d.payments} savePayments={savePayments} saveClasses={saveClasses} settings={d.settings} saveSettings={saveSettings} adminName={user.name} refresh={loadAll} />}
       </div>
     </div>
   );
@@ -4501,7 +4517,7 @@ function PaymentStatementModal({ payment, onClose }) {
   );
 }
 
-function AdminCommissions({ classes, accounts, payments, savePayments, saveClasses, settings, saveSettings, adminName }) {
+function AdminCommissions({ classes, accounts, payments, savePayments, saveClasses, settings, saveSettings, adminName, refresh }) {
   const instrRateDefault = Number(settings.commissionRate ?? 20);
   const companyRateDefault = Number(settings.companyRate ?? 10);
   const [rateInput, setRateInput] = useState(String(instrRateDefault));
@@ -4600,6 +4616,37 @@ function AdminCommissions({ classes, accounts, payments, savePayments, saveClass
     setSel({}); setPbErr(null);
   };
   const removePayment = async (id) => savePayments(payments.filter((p) => p.id !== id));
+
+  /* ---- launch reset: clear all test data ---- */
+  const [wipeText, setWipeText] = useState("");
+  const [wipeDone, setWipeDone] = useState(null);
+  const [wipeBusy, setWipeBusy] = useState(false);
+  const [extra, setExtra] = useState({ certs: 0, apps: 0, requests: 0, notices: 0 });
+  useEffect(() => {
+    (async () => {
+      const [ce, ap, rq, no] = await Promise.all([
+        loadKey("gs:certs", []), loadKey("gs:apps", []), loadKey("gs:requests", []), loadKey("gs:notices", []),
+      ]);
+      setExtra({ certs: ce.length, apps: ap.length, requests: rq.length, notices: no.length });
+    })();
+  }, []);
+  const enrollCount = classes.reduce((n, c) => n + (c.enrolled || []).length, 0);
+  const wipeAll = async () => {
+    setWipeBusy(true);
+    const paymentCount = payments.length;
+    const cls = await loadKey("gs:classes", []);
+    await saveClasses(cls.map((c) => ({ ...c, enrolled: [] })));
+    await savePayments([]);
+    await saveKey("gs:certs", []);
+    await saveKey("gs:apps", []);
+    await saveKey("gs:requests", []);
+    await saveKey("gs:notices", []);
+    setWipeText("");
+    setWipeDone(`Launch reset complete. Cleared ${enrollCount} enrollment${enrollCount === 1 ? "" : "s"}, ${paymentCount} commission payment${paymentCount === 1 ? "" : "s"}, ${extra.certs} certificate${extra.certs === 1 ? "" : "s"}, ${extra.apps} instructor application${extra.apps === 1 ? "" : "s"}, ${extra.requests} class request${extra.requests === 1 ? "" : "s"}, and ${extra.notices} notice${extra.notices === 1 ? "" : "s"}. Classes, accounts, agreements, media, discount codes, and settings were kept. The system is at zero — ready for launch.`);
+    setExtra({ certs: 0, apps: 0, requests: 0, notices: 0 });
+    setWipeBusy(false);
+    if (refresh) refresh();
+  };
 
   /* ---- per-student rate overrides ---- */
   const saveStudentRates = async () => {
@@ -4865,6 +4912,34 @@ function AdminCommissions({ classes, accounts, payments, savePayments, saveClass
             ))}
           </div>
         )}
+      </div>
+
+      <div style={{ marginTop: 40, border: `1px solid ${C.warn}`, background: "#231710", padding: "18px 20px", maxWidth: 680 }}>
+        <div style={{ ...display, fontWeight: 700, fontSize: 16, textTransform: "uppercase", color: C.warn }}>Launch reset — clear all test data</div>
+        <p style={{ color: C.muted, fontSize: 13, lineHeight: 1.7, margin: "8px 0 4px" }}>
+          Permanently deletes every transactional record from testing:
+          <strong style={{ color: C.text }}> all class enrollments &amp; rosters</strong> ({enrollCount} student{enrollCount === 1 ? "" : "s"} — this zeroes the Class Report and all commissions),
+          <strong style={{ color: C.text }}> commission payments</strong> ({payments.length}),
+          <strong style={{ color: C.text }}> certificates</strong> ({extra.certs} — removed from the public Verify page),
+          <strong style={{ color: C.text }}> instructor applications</strong> ({extra.apps}),
+          <strong style={{ color: C.text }}> class requests</strong> ({extra.requests}), and
+          <strong style={{ color: C.text }}> notices</strong> ({extra.notices}).
+        </p>
+        <p style={{ color: C.muted, fontSize: 13, lineHeight: 1.7, margin: "0 0 12px" }}>
+          Kept: your classes (with empty rosters), instructor &amp; admin accounts, signed agreements &amp; W-9s, photos &amp; videos, discount codes, and commission rate settings. This cannot be undone.
+        </p>
+        {wipeDone && <div style={{ ...mono, fontSize: 12, color: C.ok, background: "#1C2A21", border: `1px solid ${C.ok}`, padding: "10px 12px", marginBottom: 10, lineHeight: 1.6 }}>✓ {wipeDone}</div>}
+        <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
+          <div style={{ flex: "1 1 220px" }}>
+            <FieldLabel>Type DELETE to confirm</FieldLabel>
+            <input value={wipeText} onChange={(e) => setWipeText(e.target.value)} placeholder="DELETE"
+              style={{ width: "100%", padding: "9px 11px", border: `1px solid ${C.line}`, fontSize: 13, ...mono, background: C.panel2, color: C.text, boxSizing: "border-box" }} />
+          </div>
+          <button onClick={wipeAll} disabled={wipeText !== "DELETE" || wipeBusy}
+            style={{ ...mono, fontSize: 13, fontWeight: 700, background: wipeText === "DELETE" && !wipeBusy ? C.warn : "none", color: wipeText === "DELETE" && !wipeBusy ? "#14120D" : C.muted, border: `1px solid ${wipeText === "DELETE" && !wipeBusy ? C.warn : C.line}`, padding: "10px 18px", cursor: wipeText === "DELETE" && !wipeBusy ? "pointer" : "not-allowed", borderRadius: 2 }}>
+            {wipeBusy ? "Clearing…" : "Clear all test data"}
+          </button>
+        </div>
       </div>
     </div>
   );
