@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import * as XLSX from "xlsx";
+import { QRCodeSVG } from "qrcode.react";
 
 /* ============================================================
    GUARDIAN RAPID RESPONSE SHIELD — Training & Certification Platform
@@ -1813,6 +1814,22 @@ function InstructorApply({ apps, updateApps, go, classes }) {
 /* ============================================================
    INSTRUCTOR PORTAL
    ============================================================ */
+function TotpQr({ email, secret }) {
+  if (!secret) return null;
+  const issuer = "Guardian Shield Training";
+  const uri = `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(email || "account")}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`;
+  return (
+    <div style={{ display: "grid", justifyItems: "center", gap: 6 }}>
+      <div style={{ background: "#FFFFFF", padding: 12, lineHeight: 0, borderRadius: 4 }}>
+        <QRCodeSVG value={uri} size={168} level="M" />
+      </div>
+      <div style={{ ...mono, fontSize: 11, color: C.muted, textAlign: "center" }}>
+        Scan with your authenticator app — or enter the setup key below manually.
+      </div>
+    </div>
+  );
+}
+
 function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", roleName = "Instructor", keyLabel = "Instructor enrollment key", keyHint = "Issued after certification", inviteToken = null }) {
   const [mode, setMode] = useState(inviteToken ? "signup" : "signin"); // signin | signup | totp-setup | challenge
   const [err, setErr] = useState(null);
@@ -2044,8 +2061,9 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
         {mode === "totp-setup" && (
           <>
             <p style={{ fontSize: 14, color: C.muted, lineHeight: 1.6, margin: 0 }}>
-              Add this account to an authenticator app (Google Authenticator, Authy, 1Password…): create a new <strong style={{ color: C.text }}>time-based</strong> entry for <strong style={{ color: C.text }}>{pending.email}</strong> with this setup key:
+              Add this account to an authenticator app (Google Authenticator, Authy, 1Password…) by scanning this QR code:
             </p>
+            <TotpQr email={pending.email} secret={pending.totpSecret} />
             <div style={{ ...mono, fontSize: 16, letterSpacing: "0.08em", color: C.bronzeLight, background: C.panel2, border: `1px solid ${C.line}`, padding: "12px 14px", textAlign: "center", userSelect: "all" }}>
               {secretGroups}
             </div>
@@ -2093,8 +2111,9 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
                   ✓ Two-factor reset for {recResult.email}. Your old authenticator entry no longer works.
                 </div>
                 <p style={{ fontSize: 14, color: C.muted, lineHeight: 1.6, margin: 0 }}>
-                  Delete the old entry from your authenticator app, then add a <strong style={{ color: C.text }}>new time-based entry</strong> with this setup key:
+                  Delete the old entry from your authenticator app, then scan this QR code to add the new one:
                 </p>
+                <TotpQr email={recResult.email} secret={recResult.secret} />
                 <div style={{ ...mono, fontSize: 16, letterSpacing: "0.08em", color: C.bronzeLight, background: C.panel2, border: `1px solid ${C.line}`, padding: "12px 14px", textAlign: "center", userSelect: "all" }}>
                   {recResult.secret.match(/.{1,4}/g).join(" ")}
                 </div>
