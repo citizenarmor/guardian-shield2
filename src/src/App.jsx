@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import * as XLSX from "xlsx";
+import { QRCodeSVG } from "qrcode.react";
 
 /* ============================================================
    GUARDIAN RAPID RESPONSE SHIELD — Training & Certification Platform
@@ -118,6 +119,28 @@ function compressImageFile(file, maxDim = 900, quality = 0.72) {
 }
 
 const phoneOk = (p) => String(p || "").replace(/\D/g, "").length >= 10;
+const SUPERUSER_EMAIL = "aaron@citizenarmor.com";
+const isSuperUser = (u) => !!u && (u.email || "").toLowerCase() === SUPERUSER_EMAIL;
+
+const readPdfFile = (file, cb, onErr) => {
+  if (!file) return;
+  if (file.type !== "application/pdf") return onErr("Please attach a PDF file.");
+  if (file.size > 3.5 * 1024 * 1024) return onErr("PDF must be under 3.5 MB. Scan at a lower resolution if needed.");
+  const reader = new FileReader();
+  reader.onload = () => cb({ name: file.name, dataUrl: reader.result });
+  reader.onerror = () => onErr("Couldn't read that file. Try again.");
+  reader.readAsDataURL(file);
+};
+const openPdfDataUrl = (dataUrl) => {
+  try {
+    const b64 = dataUrl.split(",")[1];
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+    window.open(url, "_blank");
+  } catch (e) { alert("Couldn't open that PDF."); }
+};
 
 function isDirectVideoFile(url) {
   return /\.(mp4|webm|ogv|mov|m4v)(\?|#|$)/i.test(String(url || "").trim());
@@ -596,6 +619,7 @@ export default function App() {
           {view === "instructor" && <InstructorApply apps={apps} updateApps={updateApps} go={setView} classes={classes} />}
           {view === "portal" && (
             <Portal
+              inviteToken={adminInvite}
               user={portalUser} setUser={setPortalUser} reloadData={reloadProtected}
               accounts={accounts} updateAccounts={updateAccounts}
               classes={classes} updateClasses={updateClasses}
@@ -1812,6 +1836,22 @@ function InstructorApply({ apps, updateApps, go, classes }) {
 /* ============================================================
    INSTRUCTOR PORTAL
    ============================================================ */
+function TotpQr({ email, secret }) {
+  if (!secret) return null;
+  const issuer = "Guardian Shield Training";
+  const uri = `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(email || "account")}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`;
+  return (
+    <div style={{ display: "grid", justifyItems: "center", gap: 6 }}>
+      <div style={{ background: "#FFFFFF", padding: 12, lineHeight: 0, borderRadius: 4 }}>
+        <QRCodeSVG value={uri} size={168} level="M" />
+      </div>
+      <div style={{ ...mono, fontSize: 11, color: C.muted, textAlign: "center" }}>
+        Scan with your authenticator app — or enter the setup key below manually.
+      </div>
+    </div>
+  );
+}
+
 function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", roleName = "Instructor", keyLabel = "Instructor enrollment key", keyHint = "Issued after certification", inviteToken = null }) {
   const [mode, setMode] = useState(inviteToken ? "signup" : "signin"); // signin | signup | totp-setup | challenge
   const [err, setErr] = useState(null);
@@ -2018,7 +2058,7 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
           <>
             {inviteToken && (
               <div style={{ ...mono, fontSize: 12, color: C.ok, background: "#1C2A21", border: `1px solid ${C.ok}`, padding: "10px 12px", lineHeight: 1.6 }}>
-                You've been invited to become an administrator. Create your account below using the email address the invitation was sent to — no enrollment key needed.
+                You've been invited to join as {roleName.toLowerCase() === "admin" ? "an administrator" : "an instructor"}. Create your account below using the email address the invitation was sent to — no enrollment key needed.
               </div>
             )}
             <Field label="Full name" value={su.name} onChange={(e) => setSu({ ...su, name: e.target.value })} placeholder="Aaron Whitfield" autoComplete="name" />
@@ -2043,8 +2083,9 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
         {mode === "totp-setup" && (
           <>
             <p style={{ fontSize: 14, color: C.muted, lineHeight: 1.6, margin: 0 }}>
-              Add this account to an authenticator app (Google Authenticator, Authy, 1Password…): create a new <strong style={{ color: C.text }}>time-based</strong> entry for <strong style={{ color: C.text }}>{pending.email}</strong> with this setup key:
+              Add this account to an authenticator app (Google Authenticator, Authy, 1Password…) by scanning this QR code:
             </p>
+            <TotpQr email={pending.email} secret={pending.totpSecret} />
             <div style={{ ...mono, fontSize: 16, letterSpacing: "0.08em", color: C.bronzeLight, background: C.panel2, border: `1px solid ${C.line}`, padding: "12px 14px", textAlign: "center", userSelect: "all" }}>
               {secretGroups}
             </div>
@@ -2092,8 +2133,9 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
                   ✓ Two-factor reset for {recResult.email}. Your old authenticator entry no longer works.
                 </div>
                 <p style={{ fontSize: 14, color: C.muted, lineHeight: 1.6, margin: 0 }}>
-                  Delete the old entry from your authenticator app, then add a <strong style={{ color: C.text }}>new time-based entry</strong> with this setup key:
+                  Delete the old entry from your authenticator app, then scan this QR code to add the new one:
                 </p>
+                <TotpQr email={recResult.email} secret={recResult.secret} />
                 <div style={{ ...mono, fontSize: 16, letterSpacing: "0.08em", color: C.bronzeLight, background: C.panel2, border: `1px solid ${C.line}`, padding: "12px 14px", textAlign: "center", userSelect: "all" }}>
                   {recResult.secret.match(/.{1,4}/g).join(" ")}
                 </div>
@@ -2158,17 +2200,19 @@ function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", 
   );
 }
 
-function Portal({ user, setUser, reloadData, accounts, updateAccounts, classes, updateClasses, certs, updateCerts, notices, updateNotices, apps, updateApps, codes, updateCodes, requests, updateRequests }) {
+function Portal({ user, setUser, reloadData, accounts, updateAccounts, classes, updateClasses, certs, updateCerts, notices, updateNotices, apps, updateApps, codes, updateCodes, requests, updateRequests, inviteToken = null }) {
   const [tab, setTab] = useState("classes");
 
   if (!user) {
-    return <AuthGate accounts={accounts} updateAccounts={updateAccounts} onSignedIn={setUser} />;
+    return <AuthGate accounts={accounts} updateAccounts={updateAccounts} onSignedIn={setUser} inviteToken={inviteToken} />;
   }
 
   const instrName = user.name || "";
   const firstName = instrName.trim().split(/\s+/)[0] || "instructor";
+  const ownsClass = (c) => (c.createdBy ? c.createdBy.toLowerCase() === (user.email || "").toLowerCase() : c.instructor === instrName);
+  const ownClassIds = new Set(classes.filter(ownsClass).map((c) => c.id));
 
-  const unread = notices.filter((n) => !n.read).length;
+  const unread = notices.filter((n) => !n.read && n.classId && ownClassIds.has(n.classId)).length;
   const unreadApps = apps.filter((a) => !a.read).length;
   const unreadReqs = requests.filter((r) => !r.read).length;
   const tabs = [
@@ -2176,8 +2220,6 @@ function Portal({ user, setUser, reloadData, accounts, updateAccounts, classes, 
     ["create", "Create a class"],
     ["notify", `Notifications${unread ? ` (${unread})` : ""}`],
     ["grads", "Graduate directory"],
-    ["requests", `Class requests${unreadReqs ? ` (${unreadReqs} new)` : ""}`],
-    ["codes", "Discount codes"],
     ["agreement", "My Agreement"],
   ];
 
@@ -2201,21 +2243,20 @@ function Portal({ user, setUser, reloadData, accounts, updateAccounts, classes, 
         ))}
       </div>
       <div style={{ marginTop: 24 }}>
-        {tab === "classes" && <PortalClasses classes={classes} updateClasses={updateClasses} certs={certs} updateCerts={updateCerts} />}
-        {tab === "create" && <PortalCreate classes={classes} updateClasses={updateClasses} onCreated={() => setTab("classes")} instructorName={instrName} instructorCompany={user.company || ""} />}
-        {tab === "notify" && <PortalNotices notices={notices} updateNotices={updateNotices} />}
-        {tab === "grads" && <PortalGrads certs={certs} />}
-        {tab === "codes" && <PortalCodes codes={codes} updateCodes={updateCodes} instructorName={instrName} />}
+        {tab === "classes" && <PortalClasses classes={classes} updateClasses={updateClasses} certs={certs} updateCerts={updateCerts} ownFilter={ownsClass} />}
+        {tab === "create" && <PortalCreate classes={classes} updateClasses={updateClasses} onCreated={() => setTab("classes")} instructorName={instrName} instructorCompany={user.company || ""} creatorEmail={user.email || ""} />}
+        {tab === "notify" && <PortalNotices notices={notices} updateNotices={updateNotices} ownClassIds={ownClassIds} />}
+        {tab === "grads" && <PortalGrads certs={certs} updateCerts={updateCerts} ownClassIds={ownClassIds} />}
         {tab === "agreement" && <PortalAgreement user={user} />}
-        {tab === "requests" && <PortalRequests requests={requests} updateRequests={updateRequests} />}
       </div>
     </div>
   );
 }
 
-function PortalClasses({ classes, updateClasses, certs, updateCerts }) {
+function PortalClasses({ classes, updateClasses, certs, updateCerts, isAdmin = false, ownFilter = null }) {
+  const visible = ownFilter ? classes.filter(ownFilter) : classes;
   const [filters, setFilters] = useState({ location: "all", instructor: "all", city: "all", state: "all", company: "all", sortBy: "date" });
-  const sorted = applyClassFilters(classes, filters);
+  const sorted = applyClassFilters(visible, filters);
 
   // ---- editing / cancelling ----
   const [editingId, setEditingId] = useState(null);
@@ -2257,6 +2298,29 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts }) {
     setEditingId(null);
   };
   const reinstate = async (id) => updateClasses(classes.map((c) => (c.id === id ? { ...c, cancelled: false } : c)));
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const deleteClass = async (id) => {
+    await updateClasses(classes.filter((c) => c.id !== id));
+    setConfirmDeleteId(null); setConfirmCancelId(null); setEditingId(null);
+  };
+
+  /* ---- scanned signed roster (PDF) per class ---- */
+  const [scanErr, setScanErr] = useState(null);
+  const uploadRosterScan = (cls) => (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    setScanErr(null);
+    readPdfFile(file, async ({ name, dataUrl }) => {
+      const at = new Date().toISOString();
+      await saveKey(`gs:doc:roster:${cls.id}`, { name, dataUrl, uploadedAt: at });
+      await updateClasses(classes.map((c) => (c.id === cls.id ? { ...c, rosterScan: { name, at } } : c)));
+    }, (msg) => setScanErr({ id: cls.id, msg }));
+  };
+  const viewRosterScan = async (cls) => {
+    const doc = await loadKey(`gs:doc:roster:${cls.id}`, null);
+    if (!doc || !doc.dataUrl) return setScanErr({ id: cls.id, msg: "Scanned roster file not found." });
+    openPdfDataUrl(doc.dataUrl);
+  };
 
   const graduate = async (cls) => {
     if (enrolledN(cls) === 0) return;
@@ -2280,9 +2344,9 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts }) {
     <div style={{ display: "grid", gap: 14 }}>
       {rosterFor && <RosterPrintModal cls={rosterFor} onClose={() => setRosterFor(null)} />}
       {waiverView && <WaiverViewModal token={waiverView.token} studentName={waiverView.name} onClose={() => setWaiverView(null)} />}
-      {classes.length > 0 && <ClassFilters classes={classes} filters={filters} setFilters={setFilters} />}
-      {classes.length === 0 && <p style={{ color: C.muted }}>No classes yet. Create your first class to open registration.</p>}
-      {classes.length > 0 && sorted.length === 0 && <p style={{ color: C.muted }}>No classes match those filters.</p>}
+      {visible.length > 0 && <ClassFilters classes={visible} filters={filters} setFilters={setFilters} />}
+      {visible.length === 0 && <p style={{ color: C.muted }}>No classes yet. Create your first class to open registration.</p>}
+      {visible.length > 0 && sorted.length === 0 && <p style={{ color: C.muted }}>No classes match those filters.</p>}
       {sorted.map((c) => (
         <div key={c.id} style={{ background: C.panel, border: `1px solid ${C.line}`, padding: "18px 20px", opacity: c.cancelled ? 0.75 : 1 }}>
           <div style={{ display: "flex", gap: 16, alignItems: "baseline", flexWrap: "wrap" }}>
@@ -2420,23 +2484,48 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts }) {
               <button onClick={() => setRosterFor(c)} style={btnStyle}>Print check-in roster</button>
             </div>
           )}
-          {!c.completed && (
-            <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
-              {!c.cancelled && editingId !== c.id && (
+          {(!c.completed || isAdmin) && (
+            <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap", alignItems: "center" }}>
+              {!c.completed && !c.cancelled && editingId !== c.id && (
                 <button onClick={() => startEdit(c)} style={btnStyle}>Edit class</button>
               )}
-              {!c.cancelled && confirmCancelId !== c.id && (
-                <button onClick={() => { setConfirmCancelId(c.id); setEditingId(null); }} style={{ ...btnStyle, border: `1px solid ${C.line}`, color: C.warn }}>Cancel class</button>
+              {!c.completed && !c.cancelled && confirmCancelId !== c.id && (
+                <button onClick={() => { setConfirmCancelId(c.id); setEditingId(null); setConfirmDeleteId(null); }} style={{ ...btnStyle, border: `1px solid ${C.line}`, color: C.warn }}>Cancel class</button>
               )}
-              {c.cancelled && (
+              {!c.completed && c.cancelled && (
                 <button onClick={() => reinstate(c.id)} style={btnStyle}>Reinstate class</button>
               )}
-              {enrolledN(c) > 0 && (
+              {!c.completed && enrolledN(c) > 0 && (
                 <button onClick={() => setRosterFor(c)} style={btnStyle}>Print check-in roster</button>
               )}
-              {!c.cancelled && enrolledN(c) > 0 && (
+              {!c.completed && !c.cancelled && enrolledN(c) > 0 && (
                 <Btn small onClick={() => graduate(c)}>Mark class complete & issue certifications</Btn>
               )}
+              {c.rosterScan ? (
+                <>
+                  <button onClick={() => viewRosterScan(c)} style={btnStyle}>📄 View signed roster</button>
+                  <label style={{ ...btnStyle, display: "inline-block" }}>
+                    Replace signed roster
+                    <input type="file" accept="application/pdf" onChange={uploadRosterScan(c)} style={{ display: "none" }} />
+                  </label>
+                </>
+              ) : (
+                <label style={{ ...btnStyle, display: "inline-block" }}>
+                  Upload signed roster (PDF)
+                  <input type="file" accept="application/pdf" onChange={uploadRosterScan(c)} style={{ display: "none" }} />
+                </label>
+              )}
+              {scanErr && scanErr.id === c.id && <span style={{ ...mono, fontSize: 12, color: C.warn }}>{scanErr.msg}</span>}
+              {isAdmin && (confirmDeleteId === c.id ? (
+                <>
+                  <button onClick={() => deleteClass(c.id)} style={{ ...btnStyle, background: C.warn, color: "#14120D", border: `1px solid ${C.warn}`, fontWeight: 700 }}>Confirm delete class</button>
+                  <button onClick={() => setConfirmDeleteId(null)} style={{ ...btnStyle, color: C.muted, border: `1px solid ${C.line}` }}>Keep</button>
+                </>
+              ) : (
+                <button onClick={() => { setConfirmDeleteId(c.id); setConfirmCancelId(null); }} style={{ ...btnStyle, color: C.warn, border: `1px solid ${C.line}`, marginLeft: "auto" }}>
+                  Delete class{c.completed ? " (finished)" : ""}
+                </button>
+              ))}
             </div>
           )}
         </div>
@@ -2445,13 +2534,13 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts }) {
   );
 }
 
-function PortalCreate({ classes, updateClasses, onCreated, instructorName, instructorCompany }) {
+function PortalCreate({ classes, updateClasses, onCreated, instructorName, instructorCompany, creatorEmail = "" }) {
   const [f, setF] = useState({ date: "", time: "8:00 AM", location: "", city: "", state: "", seats: 12, price: 495, type: "standard", instructor: instructorName || "", company: instructorCompany || "" });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const valid = f.date && f.location.trim() && f.city.trim() && f.state && f.instructor.trim() && Number(f.seats) > 0;
 
   const create = async () => {
-    const cls = { id: "GS-" + uid(), ...f, location: f.location.trim(), city: f.city.trim(), company: (f.company || "").trim(), seats: Number(f.seats), price: Number(f.price), enrolled: [], completed: false };
+    const cls = { id: "GS-" + uid(), ...f, location: f.location.trim(), city: f.city.trim(), company: (f.company || "").trim(), seats: Number(f.seats), price: Number(f.price), enrolled: [], completed: false, createdBy: creatorEmail || undefined };
     await updateClasses([...classes, cls]);
     onCreated();
   };
@@ -2494,20 +2583,29 @@ function PortalCreate({ classes, updateClasses, onCreated, instructorName, instr
   );
 }
 
-function PortalNotices({ notices, updateNotices }) {
-  const markAll = async () => updateNotices(notices.map((n) => ({ ...n, read: true })));
+function PortalNotices({ notices, updateNotices, ownClassIds = null }) {
+  const visible = ownClassIds ? notices.filter((n) => n.classId && ownClassIds.has(n.classId)) : notices;
+  const visIds = new Set(visible.map((n) => n.id));
+  const markAll = async () => updateNotices(notices.map((n) => (visIds.has(n.id) ? { ...n, read: true } : n)));
+  const removeNotice = async (id) => updateNotices(notices.filter((n) => n.id !== id));
   return (
     <div>
-      {notices.length === 0 ? (
+      {visible.length === 0 ? (
         <p style={{ color: C.muted }}>No notifications yet. When a student registers for one of your classes, it appears here (and, in production, arrives by email).</p>
       ) : (
         <>
           <div style={{ marginBottom: 12 }}><Btn small ghost onClick={markAll}>Mark all read</Btn></div>
           <div style={{ display: "grid", gap: 10 }}>
-            {notices.map((n) => (
-              <div key={n.id} style={{ background: n.read ? C.panel : "#2A2415", border: `1px solid ${C.line}`, borderLeft: `4px solid ${n.read ? C.line : C.bronze}`, padding: "12px 16px" }}>
-                <div style={{ fontSize: 14, lineHeight: 1.5 }}>{n.text}</div>
-                <div style={{ ...mono, fontSize: 11, color: C.muted, marginTop: 4 }}>{n.when} · class {n.classId}</div>
+            {visible.map((n) => (
+              <div key={n.id} style={{ background: n.read ? C.panel : "#2A2415", border: `1px solid ${C.line}`, borderLeft: `4px solid ${n.read ? C.line : C.bronze}`, padding: "12px 16px", display: "flex", gap: 12, alignItems: "flex-start" }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 14, lineHeight: 1.5 }}>{n.text}</div>
+                  <div style={{ ...mono, fontSize: 11, color: C.muted, marginTop: 4 }}>{n.when} · class {n.classId}</div>
+                </div>
+                <button onClick={() => removeNotice(n.id)} title="Delete notification"
+                  style={{ ...mono, fontSize: 12, background: "none", border: `1px solid ${C.line}`, color: C.warn, padding: "4px 9px", cursor: "pointer", borderRadius: 2, whiteSpace: "nowrap" }}>
+                  Delete
+                </button>
               </div>
             ))}
           </div>
@@ -2517,12 +2615,40 @@ function PortalNotices({ notices, updateNotices }) {
   );
 }
 
-function PortalGrads({ certs }) {
+function PortalGrads({ certs, updateCerts = null, ownClassIds = null }) {
   const [printing, setPrinting] = useState(null);
   const [printingList, setPrintingList] = useState(false);
   const [sort, setSort] = useState({ key: "issued", dir: "desc" });
+  const [formsErr, setFormsErr] = useState(null);
 
-  const rows = certs.map((c) => ({
+  const scoped = ownClassIds ? certs.filter((c) => ownClassIds.has(c.classId)) : certs;
+
+  /* ---- scanned signed pre-class forms (PDF) per graduate ---- */
+  const uploadForms = (cert) => (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    setFormsErr(null);
+    readPdfFile(file, async ({ name, dataUrl }) => {
+      const scanId = uid();
+      const at = new Date().toISOString();
+      await saveKey(`gs:doc:certforms:${cert.certId}:${scanId}`, { name, dataUrl, uploadedAt: at });
+      await updateCerts(certs.map((c) => (c.certId === cert.certId
+        ? { ...c, formScans: [...(c.formScans || []), { id: scanId, name, at }] }
+        : c)));
+    }, (msg) => setFormsErr({ id: cert.certId, msg }));
+  };
+  const viewFormScan = async (cert, scan) => {
+    const doc = await loadKey(`gs:doc:certforms:${cert.certId}:${scan.id}`, null);
+    if (!doc || !doc.dataUrl) return setFormsErr({ id: cert.certId, msg: "Scanned file not found." });
+    openPdfDataUrl(doc.dataUrl);
+  };
+  const removeFormScan = async (cert, scan) => {
+    await updateCerts(certs.map((c) => (c.certId === cert.certId
+      ? { ...c, formScans: (c.formScans || []).filter((s) => s.id !== scan.id) }
+      : c)));
+  };
+
+  const rows = scoped.map((c) => ({
     ...c,
     phone: c.phone || "",
     typeLabel: c.type === "instructor" ? "Instructor" : "Graduate",
@@ -2548,6 +2674,7 @@ function PortalGrads({ certs }) {
     ["issued", "CERTIFIED"],
     ["expires", "EXPIRES"],
     ["status", "STATUS"],
+    ["formScans", "SIGNED FORMS"],
   ];
 
   const exportRows = () =>
@@ -2631,6 +2758,24 @@ function PortalGrads({ certs }) {
                     <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.panel2}` }}>{c.typeLabel}</td>
                     <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 13 }}>{c.issued}</td>
                     <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 13 }}>{c.expires}</td>
+                    <td data-forms-cell style={{ padding: "10px 12px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12 }}>
+                      <div style={{ display: "grid", gap: 4, minWidth: 150 }}>
+                        {(c.formScans || []).map((s) => (
+                          <div key={s.id} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                            <button onClick={() => viewFormScan(c, s)} style={{ background: "none", border: "none", color: C.ok, cursor: "pointer", fontFamily: "inherit", fontSize: 12, padding: 0, textDecoration: "underline", textAlign: "left" }}>📄 {s.name.length > 22 ? s.name.slice(0, 20) + "…" : s.name}</button>
+                            {updateCerts && <button onClick={() => removeFormScan(c, s)} title="Remove" style={{ background: "none", border: "none", color: C.warn, cursor: "pointer", fontSize: 12, padding: 0 }}>✕</button>}
+                          </div>
+                        ))}
+                        {updateCerts && (
+                          <label style={{ ...mono, fontSize: 11, background: "none", border: `1px solid ${C.bronzeDark}`, color: C.bronze, padding: "3px 8px", cursor: "pointer", borderRadius: 2, justifySelf: "start" }}>
+                            {(c.formScans || []).length ? "+ Add PDF" : "Attach signed forms (PDF)"}
+                            <input type="file" accept="application/pdf" onChange={uploadForms(c)} style={{ display: "none" }} />
+                          </label>
+                        )}
+                        {!updateCerts && !(c.formScans || []).length && <span style={{ color: C.muted }}>—</span>}
+                        {formsErr && formsErr.id === c.certId && <span style={{ color: C.warn }}>{formsErr.msg}</span>}
+                      </div>
+                    </td>
                     <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.panel2}`, fontWeight: 600, color: c.status === "Expired" ? C.warn : C.ok }}>{c.status}</td>
                     <td style={{ padding: "10px 12px", borderBottom: `1px solid ${C.panel2}` }}>
                       <button onClick={() => setPrinting(c)} style={{ ...mono, fontSize: 12, background: "none", border: `1px solid ${C.bronzeDark}`, color: C.bronze, padding: "5px 10px", cursor: "pointer", borderRadius: 2, whiteSpace: "nowrap" }}>
@@ -3589,7 +3734,7 @@ function RosterPrintModal({ cls, onClose }) {
    ============================================================ */
 function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = [], media, updateMedia, go, inviteToken = null }) {
   const [tab, setTab] = useState("photos");
-  const [d, setD] = useState({ classes: [], certs: [], accounts: [], payments: [], settings: { commissionRate: 20 }, apps: [] });
+  const [d, setD] = useState({ classes: [], certs: [], accounts: [], payments: [], settings: { commissionRate: 20 }, apps: [], requests: [], codes: [] });
 
   const loadAll = async () => {
     const classes = await loadKey("gs:classes", []);
@@ -3597,6 +3742,8 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
     const payments = await loadKey("gs:payments", []);
     const settings = await loadKey("gs:settings", { commissionRate: 20 });
     const apps = await loadKey("gs:apps", []);
+    const requests = await loadKey("gs:requests", []);
+    const codes = await loadKey("gs:codes", []);
     let accs = [];
     try { const r = await apiGet("auth/accounts"); accs = r.accounts; }
     catch (e) {
@@ -3605,7 +3752,7 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
         ...(accounts || []).map((a) => ({ role: "admin", name: a.name, company: a.company || "", email: a.email, phone: a.phone || "", twofa: a.twofa, created: a.created })),
       ];
     }
-    setD({ classes, certs, payments, settings, accounts: accs, apps });
+    setD({ classes, certs, payments, settings, accounts: accs, apps, requests, codes });
   };
   useEffect(() => { if (user) loadAll(); }, [user]);
 
@@ -3614,6 +3761,8 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
   const savePayments = async (next) => { setD((p) => ({ ...p, payments: next })); await saveKey("gs:payments", next); };
   const saveSettings = async (next) => { setD((p) => ({ ...p, settings: next })); await saveKey("gs:settings", next); };
   const saveApps = async (next) => { setD((p) => ({ ...p, apps: next })); await saveKey("gs:apps", next); };
+  const saveRequests = async (next) => { setD((p) => ({ ...p, requests: next })); await saveKey("gs:requests", next); };
+  const saveCodes = async (next) => { setD((p) => ({ ...p, codes: next })); await saveKey("gs:codes", next); };
 
   if (!user) {
     return <AuthGate accounts={accounts} updateAccounts={updateAccounts} onSignedIn={setUser}
@@ -3627,6 +3776,9 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
     ["videos", `Product videos (${media.videos.length})`],
     ["tvideos", `Training videos (${(media.trainingVideos || []).length})`],
     ["apps", `Applications${(d.apps || []).filter((a) => !a.read).length ? ` (${(d.apps || []).filter((a) => !a.read).length} new)` : ""}`],
+    ["classes", `Classes (${d.classes.length})`],
+    ["requests", `Class requests${(d.requests || []).filter((r) => !r.read).length ? ` (${(d.requests || []).filter((r) => !r.read).length} new)` : ""}`],
+    ["codes", "Discount codes"],
     ["users", `Users (${d.certs.length})`],
     ["admins", `Admins (${d.accounts.filter((a) => a.role === "admin").length})`],
     ["report", "Class report"],
@@ -3639,7 +3791,6 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
         <SectionTitle eyebrow={`Admin portal${user.company ? " · " + user.company : ""}`}>Welcome back, {firstName}</SectionTitle>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button onClick={loadAll} style={{ background: "none", border: `1px solid ${C.bronzeDark}`, padding: "6px 14px", cursor: "pointer", fontSize: 13, color: C.bronze }}>↻ Refresh</button>
-          <button onClick={() => go("product")} style={{ background: "none", border: `1px solid ${C.bronzeDark}`, padding: "6px 14px", cursor: "pointer", fontSize: 13, color: C.bronze }}>View The Product page</button>
           <button onClick={async () => { try { await apiPost("auth/logout", {}); } catch (e) {} setAuthToken(null); setUser(null); }} style={{ background: "none", border: `1px solid ${C.line}`, padding: "6px 14px", cursor: "pointer", fontSize: 13, color: C.muted }}>Sign out</button>
         </div>
       </div>
@@ -3659,10 +3810,13 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
         {tab === "videos" && <AdminVideos media={media} updateMedia={updateMedia} />}
         {tab === "tvideos" && <AdminVideos media={media} updateMedia={updateMedia} listKey="trainingVideos" pageLabel="The Training" allowHome={false} />}
         {tab === "apps" && <PortalApps apps={d.apps || []} updateApps={saveApps} />}
+        {tab === "classes" && <PortalClasses classes={d.classes} updateClasses={saveClasses} certs={d.certs} updateCerts={saveCerts} isAdmin />}
+        {tab === "requests" && <PortalRequests requests={d.requests || []} updateRequests={saveRequests} />}
+        {tab === "codes" && <PortalCodes codes={d.codes || []} updateCodes={saveCodes} instructorName={user.name} />}
         {tab === "users" && <AdminUsers certs={d.certs} saveCerts={saveCerts} accounts={d.accounts} refresh={loadAll} />}
         {tab === "admins" && <AdminAdmins accounts={d.accounts} refresh={loadAll} currentEmail={user.email} />}
         {tab === "report" && <AdminClassReport classes={d.classes} accounts={d.accounts} />}
-        {tab === "commissions" && <AdminCommissions classes={d.classes} accounts={d.accounts} payments={d.payments} savePayments={savePayments} saveClasses={saveClasses} settings={d.settings} saveSettings={saveSettings} adminName={user.name} refresh={loadAll} />}
+        {tab === "commissions" && <AdminCommissions classes={d.classes} accounts={d.accounts} payments={d.payments} savePayments={savePayments} saveClasses={saveClasses} settings={d.settings} saveSettings={saveSettings} adminName={user.name} refresh={loadAll} currentUser={user} />}
       </div>
     </div>
   );
@@ -3919,6 +4073,21 @@ function InstructorAccounts({ accounts }) {
   const [sort, setSort] = useState({ key: "name", dir: "asc" });
   const [msg, setMsg] = useState(null);
   const [docView, setDocView] = useState(null);
+  const [inv, setInv] = useState({ name: "", email: "" });
+  const [invBusy, setInvBusy] = useState(false);
+  const [invMsg, setInvMsg] = useState(null);
+
+  const sendInvite = async () => {
+    setInvBusy(true); setInvMsg(null);
+    try {
+      const r = await apiPost("auth/send-admin-invite", { role: "instructor", name: inv.name, email: inv.email });
+      setInvMsg(r.emailSent
+        ? { ok: true, text: `Invitation emailed to ${inv.email}. It expires in 7 days and works once.` }
+        : { ok: true, text: `Invitation created, but the email couldn't be sent. Share this link with them directly (expires in 7 days): ${r.inviteUrl}` });
+      setInv({ name: "", email: "" });
+    } catch (e) { setInvMsg({ ok: false, text: e.local ? "Invitations require the live site." : e.message }); }
+    setInvBusy(false);
+  };
 
   const sorted = [...rows].sort((a, b) => {
     const va = String(a[sort.key] ?? "").toLowerCase(), vb = String(b[sort.key] ?? "").toLowerCase();
@@ -3940,6 +4109,19 @@ function InstructorAccounts({ accounts }) {
 
   return (
     <div>
+      <div style={{ background: C.panel, border: `1px solid ${C.line}`, padding: "18px 20px", marginBottom: 24, display: "grid", gap: 10, maxWidth: 560 }}>
+        <div style={{ ...display, fontWeight: 700, fontSize: 18, textTransform: "uppercase", color: C.bronzeLight }}>Add an instructor</div>
+        <p style={{ color: C.muted, fontSize: 13, lineHeight: 1.6, margin: 0 }}>
+          Sends a one-time email link to create their instructor portal account directly — no application, passcode, or enrollment key needed. Once in, they can sign the instructor agreement and submit a W-9 from their My Agreement tab.
+        </p>
+        <div className="gs-row-2">
+          <Field label="Name" value={inv.name} onChange={(e) => setInv({ ...inv, name: e.target.value })} placeholder="Jordan Whitfield" />
+          <Field label="Email" type="email" value={inv.email} onChange={(e) => setInv({ ...inv, email: e.target.value })} placeholder="them@example.com" />
+        </div>
+        {invMsg && <div style={{ ...mono, fontSize: 12, color: invMsg.ok ? C.ok : C.warn, lineHeight: 1.6, wordBreak: "break-all" }}>{invMsg.text}</div>}
+        <Btn small onClick={sendInvite} disabled={invBusy || !/@/.test(inv.email)}>{invBusy ? "Sending…" : "Send instructor invitation"}</Btn>
+      </div>
+
       <div style={{ ...display, fontWeight: 700, fontSize: 20, textTransform: "uppercase", color: C.bronzeLight }}>Instructor Accounts <span style={{ ...mono, fontSize: 12, color: C.muted }}>({rows.length})</span></div>
       <p style={{ color: C.muted, fontSize: 13, lineHeight: 1.6, margin: "6px 0 12px", maxWidth: 720 }}>
         Every approved instructor with a portal account — including those who haven't completed the certification course yet. Reset a password here if an instructor is locked out.
@@ -4169,6 +4351,7 @@ function UserList({ title, all, saveCerts, accounts, type }) {
 
 /* ---------- Admins tab: manage administrator accounts ---------- */
 function AdminAdmins({ accounts, refresh, currentEmail }) {
+  const superuser = (currentEmail || "").toLowerCase() === SUPERUSER_EMAIL;
   const admins = accounts.filter((a) => a.role === "admin");
   const [sort, setSort] = useState({ key: "name", dir: "asc" });
   const [inv, setInv] = useState({ name: "", email: "" });
@@ -4229,6 +4412,7 @@ function AdminAdmins({ accounts, refresh, currentEmail }) {
 
   return (
     <div>
+      {superuser && (
       <div style={{ background: C.panel, border: `1px solid ${C.line}`, padding: "18px 20px", marginBottom: 24, display: "grid", gap: 10, maxWidth: 560 }}>
         <div style={{ ...display, fontWeight: 700, fontSize: 18, textTransform: "uppercase", color: C.bronzeLight }}>Invite an administrator</div>
         <p style={{ color: C.muted, fontSize: 13, lineHeight: 1.6, margin: 0 }}>
@@ -4241,6 +4425,7 @@ function AdminAdmins({ accounts, refresh, currentEmail }) {
         {invMsg && <div style={{ ...mono, fontSize: 12, color: invMsg.ok ? C.ok : C.warn, lineHeight: 1.6, wordBreak: "break-all" }}>{invMsg.text}</div>}
         <Btn small onClick={sendInvite} disabled={invBusy || !/@/.test(inv.email)}>{invBusy ? "Sending…" : "Send invitation"}</Btn>
       </div>
+      )}
 
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
         <div style={{ ...display, fontWeight: 700, fontSize: 22, textTransform: "uppercase", color: C.bronzeLight }}>Administrator accounts</div>
@@ -4278,7 +4463,7 @@ function AdminAdmins({ accounts, refresh, currentEmail }) {
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                         <button onClick={() => startEdit(a)} style={smallBtn}>Edit</button>
                         <button onClick={() => resetPassword(a)} style={smallBtn}>Reset password</button>
-                        {a.email !== currentEmail && (confirmDel === a.email ? (
+                        {superuser && a.email !== currentEmail && (confirmDel === a.email ? (
                           <>
                             <button onClick={() => remove(a)} style={{ ...smallBtn, background: C.warn, color: "#14120D", border: `1px solid ${C.warn}` }}>Confirm remove</button>
                             <button onClick={() => setConfirmDel(null)} style={{ ...smallBtn, color: C.muted, border: `1px solid ${C.line}` }}>Keep</button>
@@ -4517,7 +4702,7 @@ function PaymentStatementModal({ payment, onClose }) {
   );
 }
 
-function AdminCommissions({ classes, accounts, payments, savePayments, saveClasses, settings, saveSettings, adminName, refresh }) {
+function AdminCommissions({ classes, accounts, payments, savePayments, saveClasses, settings, saveSettings, adminName, refresh, currentUser = null }) {
   const instrRateDefault = Number(settings.commissionRate ?? 20);
   const companyRateDefault = Number(settings.companyRate ?? 10);
   const [rateInput, setRateInput] = useState(String(instrRateDefault));
@@ -4633,19 +4818,19 @@ function AdminCommissions({ classes, accounts, payments, savePayments, saveClass
   const enrollCount = classes.reduce((n, c) => n + (c.enrolled || []).length, 0);
   const wipeAll = async () => {
     setWipeBusy(true);
-    const paymentCount = payments.length;
-    const cls = await loadKey("gs:classes", []);
-    await saveClasses(cls.map((c) => ({ ...c, enrolled: [] })));
-    await savePayments([]);
-    await saveKey("gs:certs", []);
-    await saveKey("gs:apps", []);
-    await saveKey("gs:requests", []);
-    await saveKey("gs:notices", []);
-    setWipeText("");
-    setWipeDone(`Launch reset complete. Cleared ${enrollCount} enrollment${enrollCount === 1 ? "" : "s"}, ${paymentCount} commission payment${paymentCount === 1 ? "" : "s"}, ${extra.certs} certificate${extra.certs === 1 ? "" : "s"}, ${extra.apps} instructor application${extra.apps === 1 ? "" : "s"}, ${extra.requests} class request${extra.requests === 1 ? "" : "s"}, and ${extra.notices} notice${extra.notices === 1 ? "" : "s"}. Classes, accounts, agreements, media, discount codes, and settings were kept. The system is at zero — ready for launch.`);
-    setExtra({ certs: 0, apps: 0, requests: 0, notices: 0 });
+    try {
+      const r = await apiPost("auth/launch-reset", {});
+      const c = r.cleared;
+      setWipeText("");
+      setWipeDone(`Launch reset complete. Cleared ${c.enrollments} enrollment${c.enrollments === 1 ? "" : "s"}, ${c.payments} commission payment${c.payments === 1 ? "" : "s"}, ${c.certs} certificate${c.certs === 1 ? "" : "s"}, ${c.apps} instructor application${c.apps === 1 ? "" : "s"}, ${c.requests} class request${c.requests === 1 ? "" : "s"}, and ${c.notices} notice${c.notices === 1 ? "" : "s"}. Classes, accounts, agreements, media, discount codes, and settings were kept. The system is at zero — ready for launch.`);
+      setExtra({ certs: 0, apps: 0, requests: 0, notices: 0 });
+      if (refresh) refresh();
+    } catch (e) {
+      setWipeDone(null);
+      setExtra((x) => x);
+      alert(e.local ? "The launch reset requires the live site." : e.message);
+    }
     setWipeBusy(false);
-    if (refresh) refresh();
   };
 
   /* ---- per-student rate overrides ---- */
@@ -4914,6 +5099,7 @@ function AdminCommissions({ classes, accounts, payments, savePayments, saveClass
         )}
       </div>
 
+      {isSuperUser(currentUser) && (
       <div style={{ marginTop: 40, border: `1px solid ${C.warn}`, background: "#231710", padding: "18px 20px", maxWidth: 680 }}>
         <div style={{ ...display, fontWeight: 700, fontSize: 16, textTransform: "uppercase", color: C.warn }}>Launch reset — clear all test data</div>
         <p style={{ color: C.muted, fontSize: 13, lineHeight: 1.7, margin: "8px 0 4px" }}>
@@ -4941,6 +5127,7 @@ function AdminCommissions({ classes, accounts, payments, savePayments, saveClass
           </button>
         </div>
       </div>
+      )}
     </div>
   );
 }

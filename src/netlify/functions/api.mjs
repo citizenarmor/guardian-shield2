@@ -14,6 +14,8 @@ import { runReminders } from "./reminders.mjs";
 const INSTRUCTOR_KEY = (process.env.INSTRUCTOR_ENROLL_KEY || "SHIELD").toUpperCase();
 const ADMIN_KEY = (process.env.ADMIN_ENROLL_KEY || "ADMIN").toUpperCase();
 const DEMO_MODE = process.env.DEMO_MODE !== "false";
+const SUPERUSER = (process.env.SUPERUSER_EMAIL || "aaron@citizenarmor.com").toLowerCase();
+const isSuper = (sess) => !!sess && sess.role === "admin" && (sess.email || "").toLowerCase() === SUPERUSER;
 const STRIPE_SECRET = process.env.STRIPE_SECRET_KEY || "";
 const RESEND_KEY = process.env.RESEND_API_KEY || "";
 const EMAIL_FROM = process.env.EMAIL_FROM || "Guardian Shield Training <noreply@guardianshield.training>";
@@ -334,10 +336,11 @@ async function handleAuth(req, path, body) {
     if (!/@/.test(email || "")) return bad("Enter a valid email address.");
     if ((password || "").length < 8) return bad("Password must be at least 8 characters.");
     let inviteRecord = null;
-    if (role === "admin" && body.inviteToken) {
+    if (body.inviteToken) {
       inviteRecord = await readJson(`gs:admininvite:${body.inviteToken}`, null);
       if (!inviteRecord || inviteRecord.usedAt) return bad("That invitation link has already been used or is invalid.");
       if (inviteRecord.expires < Date.now()) return bad("That invitation link has expired — ask for a new one.");
+      if ((inviteRecord.role || "admin") !== role) return bad("This invitation is for a different account type.");
       if (inviteRecord.email.toLowerCase() !== String(email || "").trim().toLowerCase()) return bad(`This invitation was issued to ${inviteRecord.email}. Sign up with that email address.`);
     } else {
       const wanted = role === "admin" ? ADMIN_KEY : INSTRUCTOR_KEY;
@@ -505,31 +508,64 @@ async function handleAuth(req, path, body) {
     return json({ ok: true, totpSecret: account.totpSecret, email: account.email });
   }
 
+  /* ---- superuser: launch reset — clear all test data atomically ---- */
+  if (path === "launch-reset") {
+    const sess = await getSession(req);
+    if (!isSuper(sess)) return bad("Only the site owner can run the launch reset.", 403);
+    const classes = await readJson("gs:classes", []);
+    const payments = await readJson("gs:payments", []);
+    const certs = await readJson("gs:certs", []);
+    const apps = await readJson("gs:apps", []);
+    const requests = await readJson("gs:requests", []);
+    const notices = await readJson("gs:notices", []);
+    const enrollments = classes.reduce((n, c) => n + (c.enrolled || []).length, 0);
+    await writeJson("gs:classes", classes.map((c) => ({ ...c, enrolled: [] })));
+    await writeJson("gs:payments", []);
+    await writeJson("gs:certs", []);
+    await writeJson("gs:apps", []);
+    await writeJson("gs:requests", []);
+    await writeJson("gs:notices", []);
+    return json({ ok: true, cleared: { enrollments, payments: payments.length, certs: certs.length, apps: apps.length, requests: requests.length, notices: notices.length } });
+  }
+
   /* ---- admin: invite another administrator ---- */
   if (path === "send-admin-invite") {
     const sess = await getSession(req);
     if (!sess || sess.role !== "admin") return bad("Admin access required.", 403);
     const { name, email } = body;
+    const inviteRole = body.role === "instructor" ? "instructor" : "admin";
+    if (inviteRole === "admin" && !isSuper(sess)) return bad("Only the site owner can add administrators.", 403);
     if (!/@/.test(email || "")) return bad("Enter a valid email address.");
     const accounts = await getAccounts();
     if (findAccount(accounts, email)) return bad("An account with that email already exists.");
     const token = randomToken();
     await writeJson(`gs:admininvite:${token}`, {
-      name: (name || "").trim(), email: email.trim(),
+      role: inviteRole, name: (name || "").trim(), email: email.trim(),
       invitedBy: sess.email, createdAt: new Date().toISOString(),
       expires: Date.now() + 7 * 24 * 60 * 60 * 1000,
     });
-    const inviteUrl = `https://guardianshield.training/?view=admin&invite=${token}`;
+    const inviteUrl = `https://guardianshield.training/?view=${inviteRole === "instructor" ? "portal" : "admin"}&invite=${token}`;
     let emailSent = false;
     if (RESEND_KEY) {
-      const result = await sendEmail(email.trim(), "You're invited to administer Guardian Shield Training", `
+      const subject = inviteRole === "instructor"
+        ? "You're invited to join Guardian Shield Training as an instructor"
+        : "You're invited to administer Guardian Shield Training";
+      const bodyHtml = inviteRole === "instructor" ? `
+        <p>Hi ${esc((name || "there").split(" ")[0])},</p>
+        <p><strong>${esc(sess.name || sess.email)}</strong> has invited you to join the Guardian Shield Training platform as an instructor.</p>
+        <p>Use the button below to create your instructor portal account. You'll set a password and add the account to an authenticator app for two-factor sign-in. Once you're in, you can sign your instructor agreement and submit your W-9 from the My Agreement tab.</p>
+        <p style="text-align:center;margin:22px 0;">
+          <a href="${inviteUrl}" style="background:#C9A45C;color:#1A1509;font-weight:700;padding:13px 26px;text-decoration:none;letter-spacing:0.04em;">Create your instructor account &rarr;</a>
+        </p>
+        <p style="font-size:13px;color:#A99F86;">This invitation is for ${esc(email.trim())} only and expires in 7 days. If you weren't expecting it, you can ignore this email.</p>` : `
         <p>Hi ${esc((name || "there").split(" ")[0])},</p>
         <p><strong>${esc(sess.name || sess.email)}</strong> has invited you to become an administrator of the Guardian Shield Training platform.</p>
         <p>Use the button below to create your admin account. You'll set a password and add the account to an authenticator app for two-factor sign-in.</p>
         <p style="text-align:center;margin:22px 0;">
           <a href="${inviteUrl}" style="background:#C9A45C;color:#1A1509;font-weight:700;padding:13px 26px;text-decoration:none;letter-spacing:0.04em;">Create your admin account &rarr;</a>
         </p>
-        <p style="font-size:13px;color:#A99F86;">This invitation is for ${esc(email.trim())} only and expires in 7 days. If you weren't expecting it, you can ignore this email.</p>`);
+        <p style="font-size:13px;color:#A99F86;">This invitation is for ${esc(email.trim())} only and expires in 7 days. If you weren't expecting it, you can ignore this email.</p>`;
+      const result = await sendEmail(email.trim(), subject, bodyHtml);
       emailSent = !result.error && !result.skipped;
     }
     return json({ ok: true, emailSent, inviteUrl });
@@ -559,6 +595,7 @@ async function handleAuth(req, path, body) {
     const accounts = await getAccounts();
     const account = findAccount(accounts, email);
     if (!account) return bad("No account found with that email.", 404);
+    if (account.role === "admin" && !isSuper(sess)) return bad("Only the site owner can remove administrators.", 403);
     await saveAccounts(accounts.filter((a) => a !== account));
     return json({ ok: true });
   }
@@ -600,8 +637,8 @@ async function handleStorage(req, key, sess) {
   // Role rules:
   //  - instructors: full app data (classes, certs, apps, notices, codes, requests, resumes)
   //  - admins: media, plus reporting/user-management data (certs, classes, payments, settings)
-  const instructorKeys = /^gs:(classes|certs|apps|notices|codes|requests|resume:.+)$/;
-  const adminKeys = /^gs:(media|certs|classes|payments|settings|apps|resume:.+)$/;
+  const instructorKeys = /^gs:(classes|certs|apps|notices|codes|requests|resume:.+|doc:.+)$/;
+  const adminKeys = /^gs:(media|certs|classes|payments|settings|apps|requests|codes|notices|resume:.+|doc:.+)$/;
 
   const canRead = sess.role === "instructor"
     ? key === "gs:media" || instructorKeys.test(key)
