@@ -115,8 +115,16 @@ async function sendEmail(to, subject, bodyHtml) {
   const html = `<!doctype html><body style="margin:0;background:#12100C;padding:24px 12px;font-family:Georgia,serif;">
     <div style="max-width:560px;margin:0 auto;background:#1C1913;border:1px solid #3A3527;border-top:4px solid #C9A45C;">
       <div style="padding:22px 26px;border-bottom:1px solid #3A3527;">
-        <div style="color:#C9A45C;font-size:11px;letter-spacing:3px;font-family:Courier,monospace;">GUARDIAN SHIELD TRAINING</div>
-        <div style="color:#EAE3D2;font-size:22px;font-weight:bold;margin-top:6px;">${subject}</div>
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+          <td style="padding-right:16px;vertical-align:middle;">
+            <img src="https://guardianshield.training/email-logo.png" width="60" height="60" alt="Guardian Rapid Response Shield"
+              style="display:block;border-radius:50%;border:2px solid #8F6F2E;" />
+          </td>
+          <td style="vertical-align:middle;">
+            <div style="color:#C9A45C;font-size:11px;letter-spacing:3px;font-family:Courier,monospace;">GUARDIAN SHIELD TRAINING</div>
+            <div style="color:#EAE3D2;font-size:22px;font-weight:bold;margin-top:6px;">${subject}</div>
+          </td>
+        </tr></table>
       </div>
       <div style="padding:22px 26px;color:#EAE3D2;font-size:15px;line-height:1.7;">${bodyHtml}</div>
       <div style="padding:14px 26px;border-top:1px solid #3A3527;color:#A29A85;font-size:12px;font-style:italic;">Protect what matters most. · guardianshield.training</div>
@@ -786,6 +794,18 @@ export default async (req) => {
       p.statementEmailedTo = recipients.join(", ");
       await writeJson("gs:payments", payments);
       return json({ emailed: true, to: recipients });
+    }
+    if (path === "email-status") {
+      return json({
+        phase3Deployed: true,
+        resendKeyPresent: !!RESEND_KEY,
+        resendKeyLooksValid: RESEND_KEY.startsWith("re_"),
+        adminNotifySet: !!ADMIN_NOTIFY,
+        emailFrom: EMAIL_FROM,
+        stripeKeyPresent: !!STRIPE_SECRET,
+        stripeMode: STRIPE_SECRET.startsWith("sk_test_") ? "test" : STRIPE_SECRET.startsWith("sk_live_") ? "live" : "none",
+        demoMode: DEMO_MODE,
+      });
     }
     if (path === "register" && req.method === "POST") return await handleRegister(body);
     if (path === "create-checkout" && req.method === "POST") return await handleCreateCheckout(req, body);
