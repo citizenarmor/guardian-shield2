@@ -3196,10 +3196,57 @@ function SignPage({ token }) {
   );
 }
 
+/* ---------- Printable document sheet (agreements, waivers) ---------- */
+function DocPrintModal({ title, meta, docs, onClose }) {
+  const ink = "#2B2415";
+  const bronze = "#8F6F2E";
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(6,5,3,.85)", zIndex: 80, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: 16, overflowY: "auto" }}>
+      <style>{`
+        @media print {
+          @page { size: 8.5in 11in; margin: 0.65in; }
+          .print-sheet { position: static !important; width: auto !important; }
+        }
+      `}</style>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 820 }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, margin: "8px 0 12px" }}>
+          <Btn small ghost onClick={onClose}>Close</Btn>
+          <Btn small onClick={() => window.print()}>Print / Save as PDF</Btn>
+        </div>
+        <div className="print-sheet" style={{ background: "#FFFFFF", color: ink, padding: "36px 44px", boxSizing: "border-box", boxShadow: "0 16px 50px rgba(0,0,0,.6)" }}>
+          <div style={{ borderBottom: `3px solid ${bronze}`, paddingBottom: 12, marginBottom: 4 }}>
+            <div style={{ ...mono, fontSize: 11, letterSpacing: "0.24em", color: bronze }}>GUARDIAN SHIELD TRAINING · THE ARMORED CITIZEN, LLC</div>
+            <div style={{ ...display, fontWeight: 800, fontSize: 26, textTransform: "uppercase", marginTop: 4, color: ink }}>{title}</div>
+          </div>
+          {meta && (
+            <div style={{ border: `1px solid ${bronze}`, background: "#F7F2E4", padding: "10px 14px", margin: "14px 0 4px", fontSize: 13, lineHeight: 1.7 }}>
+              {meta.map((line, i) => <div key={i}>{line}</div>)}
+            </div>
+          )}
+          {docs.map(([docTitle, sections]) => (
+            <div key={docTitle} style={{ marginTop: 18 }}>
+              {docs.length > 1 && <div style={{ ...display, fontWeight: 700, fontSize: 17, textTransform: "uppercase", color: bronze, borderBottom: `1px solid ${bronze}`, paddingBottom: 4 }}>{docTitle}</div>}
+              {sections.map(([h, t], i) => (
+                <p key={i} style={{ fontSize: 12.5, lineHeight: 1.6, margin: "9px 0 0", breakInside: "avoid" }}>
+                  <strong>{h}.</strong> {t}
+                </p>
+              ))}
+            </div>
+          ))}
+          <div style={{ ...mono, fontSize: 10, color: "#8A7F63", borderTop: "1px solid #D8D0BA", marginTop: 22, paddingTop: 8 }}>
+            Electronically executed and recorded by guardianshield.training · Protect what matters most.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ---------- Admin: view a signed agreement or W-9 ---------- */
 function InstructorDocModal({ doc, onClose }) {
   const [rec, setRec] = useState(null);
   const [err, setErr] = useState(null);
+  const [printing, setPrinting] = useState(false);
   useEffect(() => {
     (async () => {
       try { setRec(await apiGet(`${doc.kind === "w9" ? "w9" : "agreement"}?email=${encodeURIComponent(doc.email)}`)); }
@@ -3229,8 +3276,19 @@ function InstructorDocModal({ doc, onClose }) {
           {rec.agreement.map(([h, t], i) => (
             <p key={i} style={{ fontSize: 13, lineHeight: 1.65, color: C.text, margin: "8px 0 0" }}><strong style={{ color: C.bronzeLight }}>{h}.</strong> {t}</p>
           ))}
-          <div style={{ marginTop: 14 }}><Btn small ghost onClick={() => window.print()}>Print / Save as PDF</Btn></div>
+          <div style={{ marginTop: 14 }}><Btn small ghost onClick={() => setPrinting(true)}>Print / Save as PDF</Btn></div>
         </div>
+      )}
+      {printing && rec && (
+        <DocPrintModal
+          title="Instructor Agreement"
+          meta={[
+            <span key="s"><strong>Electronically signed by:</strong> {rec.typedSignature}</span>,
+            <span key="d">{new Date(rec.signedAt).toLocaleString()} · Document version {rec.docVersion}{rec.ip ? ` · IP ${rec.ip}` : ""}</span>,
+            <span key="n">Instructor: {rec.instructorName}{rec.company ? ` (${rec.company})` : ""} · {rec.instructorEmail}</span>,
+          ]}
+          docs={[["Instructor Agreement", rec.agreement]]}
+          onClose={() => setPrinting(false)} />
       )}
     </Modal>
   );
@@ -3342,6 +3400,7 @@ function PortalAgreement({ user }) {
 function WaiverViewModal({ token, studentName, onClose }) {
   const [rec, setRec] = useState(null);
   const [err, setErr] = useState(null);
+  const [printing, setPrinting] = useState(false);
   useEffect(() => {
     (async () => {
       try { setRec(await apiGet(`waiver?token=${encodeURIComponent(token)}`)); }
@@ -3368,8 +3427,18 @@ function WaiverViewModal({ token, studentName, onClose }) {
               ))}
             </div>
           ))}
-          <div style={{ marginTop: 14 }}><Btn small ghost onClick={() => window.print()}>Print / Save as PDF</Btn></div>
+          <div style={{ marginTop: 14 }}><Btn small ghost onClick={() => setPrinting(true)}>Print / Save as PDF</Btn></div>
         </div>
+      )}
+      {printing && rec && (
+        <DocPrintModal
+          title="Signed Required Forms"
+          meta={[
+            <span key="s"><strong>Electronically signed by:</strong> {rec.typedSignature}</span>,
+            <span key="d">{new Date(rec.signedAt).toLocaleString()} · Ref {rec.ref} · Document version {rec.docVersion}{rec.ip ? ` · IP ${rec.ip}` : ""}</span>,
+          ]}
+          docs={[["Range Safety Briefing", rec.briefing], ["Release and Waiver of Liability", rec.waiver]]}
+          onClose={() => setPrinting(false)} />
       )}
     </Modal>
   );
