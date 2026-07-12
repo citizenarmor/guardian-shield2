@@ -114,6 +114,28 @@ function compressImageFile(file, maxDim = 900, quality = 0.72) {
   });
 }
 
+function isDirectVideoFile(url) {
+  return /\.(mp4|webm|ogv|mov|m4v)(\?|#|$)/i.test(String(url || "").trim());
+}
+
+function VideoPlayer({ url, title }) {
+  if (isDirectVideoFile(url)) {
+    return (
+      <video controls preload="metadata" playsInline title={title || "Guardian shield video"}
+        style={{ width: "100%", height: "100%", display: "block", background: "#000" }}>
+        <source src={String(url).trim()} />
+        Your browser does not support video playback.
+      </video>
+    );
+  }
+  return (
+    <iframe src={toEmbedUrl(url)} title={title || "Guardian shield video"}
+      style={{ width: "100%", height: "100%", border: "none", display: "block" }}
+      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+      allowFullScreen />
+  );
+}
+
 function toEmbedUrl(url) {
   try {
     const u = new URL(url.trim());
@@ -414,12 +436,19 @@ export default function App() {
 
   // Returning from Stripe checkout (?reg=success|cancel)
   const [stripeReturn, setStripeReturn] = useState(null);
+  const [signToken, setSignToken] = useState(null);
   useEffect(() => {
     let q;
     try { q = new URLSearchParams(window.location.search); } catch (e) { return; }
     const reg = q.get("reg");
-    if (!reg) return;
+    const deepView = q.get("view");
+    const signTok = q.get("sign");
+    if (!reg && !deepView && !signTok) return;
     try { window.history.replaceState({}, "", window.location.pathname); } catch (e) {}
+    const VALID_VIEWS = ["home", "product", "training", "schedule", "about", "verify", "instructor", "portal", "admin"];
+    if (signTok && signTok.length >= 10) { setSignToken(signTok); setView("sign"); }
+    if (deepView && VALID_VIEWS.includes(deepView)) setView(deepView);
+    if (!reg) return;
     if (reg === "cancel") { setStripeReturn({ status: "cancel" }); return; }
     const sid = q.get("session_id");
     if (reg !== "success" || !sid) return;
@@ -542,7 +571,8 @@ export default function App() {
               )}
             </Modal>
           )}
-          {view === "home" && <Home go={setView} />}
+          {view === "sign" && signToken && <SignPage token={signToken} />}
+          {view === "home" && <Home go={setView} media={media} />}
           {view === "product" && <Product go={setView} media={media} />}
           {view === "about" && <About go={setView} />}
           {view === "admin" && (
@@ -584,7 +614,8 @@ export default function App() {
 /* ============================================================
    HOME — marketing
    ============================================================ */
-function Home({ go }) {
+function Home({ go, media = { photos: [], videos: [] } }) {
+  const homeVideo = (media.videos || []).find((v) => v.id === media.homeVideoId);
   const [flipped, setFlipped] = useState(false);
   return (
     <div>
@@ -626,8 +657,18 @@ function Home({ go }) {
               </div>
             </div>
 
-            {/* signature: flip shield — art side / armor side */}
-            <div style={{ justifySelf: "center" }}>
+            {/* signature: the admin-selected home video (flip shield remains until one is assigned) */}
+            <div style={{ justifySelf: "center", width: "100%", maxWidth: 560 }}>
+              {homeVideo ? (
+                <div style={{ background: C.panel, border: `1px solid ${C.line}`, boxShadow: "0 20px 50px rgba(0,0,0,.6)" }}>
+                  <div style={{ width: "100%", aspectRatio: "16 / 9" }}>
+                    <VideoPlayer url={homeVideo.url} title={homeVideo.title} />
+                  </div>
+                  {homeVideo.title && (
+                    <div style={{ ...mono, fontSize: 11, color: C.muted, padding: "8px 10px", borderTop: `1px solid ${C.line}` }}>{homeVideo.title}</div>
+                  )}
+                </div>
+              ) : (
               <button
                 onClick={() => setFlipped(!flipped)}
                 aria-label="Flip the shield to see the other side"
@@ -663,6 +704,7 @@ function Home({ go }) {
                 </div>
                 <div style={{ ...mono, fontSize: 12, color: C.muted, marginTop: 12 }}>tap to flip the shield ⟲</div>
               </button>
+              )}
             </div>
           </div>
         </div>
@@ -869,10 +911,7 @@ function Product({ go, media = { photos: [], videos: [] } }) {
             {media.videos.map((v) => (
               <div key={v.id} style={{ background: C.panel, border: `1px solid ${C.line}` }}>
                 <div style={{ width: "100%", aspectRatio: "16 / 9" }}>
-                  <iframe src={toEmbedUrl(v.url)} title={v.title || "Guardian shield video"}
-                    style={{ width: "100%", height: "100%", border: "none", display: "block" }}
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                    allowFullScreen />
+                  <VideoPlayer url={v.url} title={v.title} />
                 </div>
                 {v.title && <div style={{ ...mono, fontSize: 11, color: C.muted, padding: "8px 10px", borderTop: `1px solid ${C.line}` }}>{v.title}</div>}
               </div>
@@ -2093,6 +2132,7 @@ function Portal({ user, setUser, reloadData, accounts, updateAccounts, classes, 
     ["apps", `Instructor applications${unreadApps ? ` (${unreadApps} new)` : ""}`],
     ["requests", `Class requests${unreadReqs ? ` (${unreadReqs} new)` : ""}`],
     ["codes", "Discount codes"],
+    ["agreement", "My Agreement"],
   ];
 
   return (
@@ -2121,6 +2161,7 @@ function Portal({ user, setUser, reloadData, accounts, updateAccounts, classes, 
         {tab === "grads" && <PortalGrads certs={certs} />}
         {tab === "apps" && <PortalApps apps={apps} updateApps={updateApps} />}
         {tab === "codes" && <PortalCodes codes={codes} updateCodes={updateCodes} instructorName={instrName} />}
+        {tab === "agreement" && <PortalAgreement user={user} />}
         {tab === "requests" && <PortalRequests requests={requests} updateRequests={updateRequests} />}
       </div>
     </div>
@@ -2137,6 +2178,7 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts }) {
   const [editErr, setEditErr] = useState(null);
   const [confirmCancelId, setConfirmCancelId] = useState(null);
   const [rosterFor, setRosterFor] = useState(null);
+  const [waiverView, setWaiverView] = useState(null);
   const eset = (k) => (e) => setEf({ ...ef, [k]: e.target.value });
 
   const startEdit = (c) => {
@@ -2192,6 +2234,7 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts }) {
   return (
     <div style={{ display: "grid", gap: 14 }}>
       {rosterFor && <RosterPrintModal cls={rosterFor} onClose={() => setRosterFor(null)} />}
+      {waiverView && <WaiverViewModal token={waiverView.token} studentName={waiverView.name} onClose={() => setWaiverView(null)} />}
       {classes.length > 0 && <ClassFilters classes={classes} filters={filters} setFilters={setFilters} />}
       {classes.length === 0 && <p style={{ color: C.muted }}>No classes yet. Create your first class to open registration.</p>}
       {classes.length > 0 && sorted.length === 0 && <p style={{ color: C.muted }}>No classes match those filters.</p>}
@@ -2207,6 +2250,11 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts }) {
             {c.cancelled && <span style={{ ...mono, fontSize: 12, color: C.warn }}>✕ CANCELLED — HIDDEN FROM SCHEDULE</span>}
           </div>
           <div style={{ color: C.muted, fontSize: 14, marginTop: 4 }}>{classPlace(c)}{c.company ? ` · ${c.company}` : ""} · ${c.price} · {enrolledN(c)}/{c.seats} enrolled</div>
+          {(c.reminder7SentAt || c.reminder1SentAt) && (
+            <div style={{ ...mono, fontSize: 11, color: C.ok, marginTop: 3 }}>
+              {c.reminder7SentAt ? "✓ 1-week reminders emailed" : ""}{c.reminder7SentAt && c.reminder1SentAt ? " · " : ""}{c.reminder1SentAt ? "✓ day-before reminders emailed" : ""}
+            </div>
+          )}
 
           {/* inline edit form */}
           {editingId === c.id && (
@@ -2296,6 +2344,7 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts }) {
                   <th style={{ padding: "6px 8px", borderBottom: `1px solid ${C.line}` }}>PHONE</th>
                   <th style={{ padding: "6px 8px", borderBottom: `1px solid ${C.line}` }}>COMPANY</th>
                   <th style={{ padding: "6px 8px", borderBottom: `1px solid ${C.line}` }}>REGISTERED</th>
+                  <th style={{ padding: "6px 8px", borderBottom: `1px solid ${C.line}` }}>FORMS</th>
                   <th style={{ padding: "6px 8px", borderBottom: `1px solid ${C.line}` }}>REF</th>
                 </tr>
               </thead>
@@ -2307,6 +2356,11 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts }) {
                     <td style={{ padding: "6px 8px", borderBottom: `1px solid ${C.panel2}` }}>{s.phone || "—"}</td>
                     <td style={{ padding: "6px 8px", borderBottom: `1px solid ${C.panel2}` }}>{s.company || "—"}</td>
                     <td style={{ padding: "6px 8px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12 }}>{s.registeredAt ? new Date(s.registeredAt).toLocaleDateString() : "—"}</td>
+                    <td style={{ padding: "6px 8px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12 }}>
+                      {s.waiverSignedAt
+                        ? <button onClick={() => setWaiverView({ token: s.signToken, name: s.name })} style={{ background: "none", border: "none", color: C.ok, cursor: "pointer", ...mono, fontSize: 12, padding: 0, textDecoration: "underline" }}>✓ signed</button>
+                        : <span style={{ color: C.warn }}>not signed</span>}
+                    </td>
                     <td style={{ padding: "6px 8px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12 }}>{s.ref}</td>
                   </tr>
                 ))}
@@ -3037,6 +3091,275 @@ function CertPrintModal({ cert, onClose }) {
   );
 }
 
+/* ---------- Required forms: student signing page ---------- */
+function SignPage({ token }) {
+  const [info, setInfo] = useState(null);
+  const [err, setErr] = useState(null);
+  const [ackBriefing, setAckBriefing] = useState(false);
+  const [ackWaiver, setAckWaiver] = useState(false);
+  const [typedName, setTypedName] = useState("");
+  const [signing, setSigning] = useState(false);
+  const [signedAt, setSignedAt] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await apiGet(`sign-info?token=${encodeURIComponent(token)}`);
+        setInfo(r);
+        if (r.signedAt) setSignedAt(r.signedAt);
+      } catch (e) { setErr(e.local ? "Signing links require the live site." : e.message); }
+    })();
+  }, [token]);
+
+  const submit = async () => {
+    setSigning(true); setErr(null);
+    try {
+      const r = await apiPost("sign", { token, typedName });
+      setSignedAt(r.signedAt || new Date().toISOString());
+    } catch (e) { setErr(e.message); }
+    setSigning(false);
+  };
+
+  const Section = ({ title, sections }) => (
+    <div style={{ background: C.panel, border: `1px solid ${C.line}`, padding: "20px 22px", marginTop: 16 }}>
+      <div style={{ ...display, fontWeight: 700, fontSize: 20, textTransform: "uppercase", color: C.bronzeLight }}>{title}</div>
+      {sections.map(([h, t], i) => (
+        <p key={i} style={{ fontSize: 14, lineHeight: 1.7, color: C.text, margin: "10px 0 0" }}>
+          <strong style={{ color: C.bronzeLight }}>{h}.</strong> {t}
+        </p>
+      ))}
+    </div>
+  );
+
+  if (err && !info) return <div style={{ maxWidth: 760, margin: "40px auto", padding: "0 16px" }}><p style={{ color: C.warn }}>{err}</p></div>;
+  if (!info) return <div style={{ maxWidth: 760, margin: "40px auto", padding: "0 16px" }}><p style={{ color: C.muted }}>Loading your forms…</p></div>;
+
+  const place = [info.cls.location, [info.cls.city, info.cls.state].filter(Boolean).join(", ")].filter(Boolean).join(" — ");
+  const canSign = ackBriefing && ackWaiver && typedName.trim().length >= 3;
+
+  return (
+    <div style={{ maxWidth: 760, margin: "0 auto", padding: "28px 16px 60px" }}>
+      <div style={{ ...mono, fontSize: 11, letterSpacing: "0.2em", color: C.bronze }}>REQUIRED TRAINING FORMS · v{info.docs.version}</div>
+      <h1 style={{ ...display, fontWeight: 800, fontSize: 30, textTransform: "uppercase", color: C.text, margin: "8px 0 2px" }}>Range Safety Briefing &amp; Liability Waiver</h1>
+      <p style={{ color: C.muted, fontSize: 14, lineHeight: 1.6 }}>
+        For <strong style={{ color: C.text }}>{info.student.name}</strong> · {info.cls.type === "instructor" ? "Instructor Certification Course" : "Guardian 2-Day Certification"} on <strong style={{ color: C.text }}>{info.cls.date}</strong> at {place} · Ref {info.student.ref}
+      </p>
+
+      {signedAt ? (
+        <div style={{ background: "#1C2A21", border: `1px solid ${C.ok}`, padding: "18px 20px", marginTop: 18 }}>
+          <div style={{ ...display, fontWeight: 700, fontSize: 20, color: C.ok, textTransform: "uppercase" }}>✓ Forms signed</div>
+          <p style={{ fontSize: 14, color: C.text, lineHeight: 1.6, margin: "8px 0 0" }}>
+            Signed on {new Date(signedAt).toLocaleString()}. A copy has been emailed to {info.student.email} for your records. You're all set for class — see you on {info.cls.date}!
+          </p>
+        </div>
+      ) : (
+        <>
+          <Section title="Range Safety Briefing" sections={info.docs.briefing} />
+          <Section title="Release and Waiver of Liability" sections={info.docs.waiver} />
+
+          <div style={{ background: C.panel, border: `1px solid ${C.bronzeDark}`, padding: "20px 22px", marginTop: 16, display: "grid", gap: 12 }}>
+            <label style={{ display: "flex", gap: 10, fontSize: 14, color: C.text, lineHeight: 1.5, cursor: "pointer" }}>
+              <input type="checkbox" checked={ackBriefing} onChange={(e) => setAckBriefing(e.target.checked)} style={{ marginTop: 3 }} />
+              <span>I have read and understand the <strong>Range Safety Briefing</strong> and agree to follow it at all times.</span>
+            </label>
+            <label style={{ display: "flex", gap: 10, fontSize: 14, color: C.text, lineHeight: 1.5, cursor: "pointer" }}>
+              <input type="checkbox" checked={ackWaiver} onChange={(e) => setAckWaiver(e.target.checked)} style={{ marginTop: 3 }} />
+              <span>I have read and agree to the <strong>Release and Waiver of Liability</strong>, including the consent to sign electronically.</span>
+            </label>
+            <div>
+              <FieldLabel>Type your full legal name as your electronic signature</FieldLabel>
+              <input value={typedName} onChange={(e) => setTypedName(e.target.value)} placeholder={info.student.name}
+                style={{ width: "100%", padding: "12px 14px", border: `1px solid ${C.line}`, fontSize: 18, fontStyle: "italic", background: C.panel2, color: C.bronzeLight, boxSizing: "border-box", fontFamily: "Georgia, serif" }} />
+            </div>
+            {err && <div style={{ ...mono, fontSize: 12, color: C.warn }}>{err}</div>}
+            <Btn onClick={submit} disabled={!canSign || signing}>{signing ? "Signing…" : "Sign both forms"}</Btn>
+            <div style={{ ...mono, fontSize: 11, color: C.muted }}>Your signature is recorded with the date, time, and network details of this submission.</div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ---------- Admin: view a signed agreement or W-9 ---------- */
+function InstructorDocModal({ doc, onClose }) {
+  const [rec, setRec] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => {
+    (async () => {
+      try { setRec(await apiGet(`${doc.kind === "w9" ? "w9" : "agreement"}?email=${encodeURIComponent(doc.email)}`)); }
+      catch (e) { setErr(e.local ? "Documents are stored on the live site." : e.message); }
+    })();
+  }, [doc]);
+  return (
+    <Modal title={doc.kind === "w9" ? `W-9 — ${doc.name}` : `Instructor Agreement — ${doc.name}`} onClose={onClose}>
+      {err && <p style={{ color: C.warn }}>{err}</p>}
+      {!rec && !err && <p style={{ color: C.muted }}>Loading…</p>}
+      {rec && doc.kind === "w9" && (
+        <div style={{ display: "grid", gap: 12 }}>
+          <p style={{ fontSize: 14, color: C.text, lineHeight: 1.6, margin: 0 }}>
+            <strong>{rec.fileName}</strong> · uploaded {new Date(rec.uploadedAt).toLocaleString()}
+          </p>
+          <p style={{ fontSize: 13, color: C.muted, lineHeight: 1.6, margin: 0 }}>This form contains the instructor's taxpayer identification information — handle accordingly.</p>
+          <a href={rec.dataUrl} download={rec.fileName}
+            style={{ ...mono, fontSize: 13, fontWeight: 700, color: "#1A1509", background: C.bronze, padding: "10px 18px", textDecoration: "none", textAlign: "center" }}>Download W-9 (PDF)</a>
+        </div>
+      )}
+      {rec && doc.kind === "agreement" && (
+        <div style={{ maxHeight: "60vh", overflowY: "auto", paddingRight: 6 }}>
+          <div style={{ background: "#1C2A21", border: `1px solid ${C.ok}`, padding: "12px 14px", fontSize: 13, color: C.text, lineHeight: 1.7 }}>
+            <strong style={{ color: C.ok }}>Electronically signed:</strong> {rec.typedSignature}<br />
+            <span style={{ ...mono, fontSize: 12, color: C.muted }}>{new Date(rec.signedAt).toLocaleString()} · Doc v{rec.docVersion}{rec.ip ? ` · IP ${rec.ip}` : ""}</span>
+          </div>
+          {rec.agreement.map(([h, t], i) => (
+            <p key={i} style={{ fontSize: 13, lineHeight: 1.65, color: C.text, margin: "8px 0 0" }}><strong style={{ color: C.bronzeLight }}>{h}.</strong> {t}</p>
+          ))}
+          <div style={{ marginTop: 14 }}><Btn small ghost onClick={() => window.print()}>Print / Save as PDF</Btn></div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+/* ---------- Instructor portal: agreement + W-9 ---------- */
+function PortalAgreement({ user }) {
+  const [st, setSt] = useState(null);
+  const [err, setErr] = useState(null);
+  const [ack, setAck] = useState(false);
+  const [typedName, setTypedName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [w9Busy, setW9Busy] = useState(false);
+  const [w9Msg, setW9Msg] = useState(null);
+
+  const load = async () => {
+    try { setSt(await apiGet("agreement-status")); setErr(null); }
+    catch (e) { setErr(e.local ? "The agreement is available on the live site." : e.message); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const sign = async () => {
+    setBusy(true); setErr(null);
+    try { await apiPost("sign-agreement", { typedName }); await load(); }
+    catch (e) { setErr(e.message); }
+    setBusy(false);
+  };
+
+  const onW9 = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    if (file.type !== "application/pdf") { setW9Msg({ ok: false, text: "Please upload a PDF file." }); return; }
+    if (file.size > 4 * 1024 * 1024) { setW9Msg({ ok: false, text: "Please keep the file under 4 MB." }); return; }
+    setW9Busy(true); setW9Msg(null);
+    try {
+      const dataUrl = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
+      await apiPost("upload-w9", { fileName: file.name, dataUrl });
+      setW9Msg({ ok: true, text: "✓ W-9 received and attached to your file." });
+      await load();
+    } catch (e2) { setW9Msg({ ok: false, text: e2.local ? "Uploads require the live site." : e2.message }); }
+    setW9Busy(false);
+  };
+
+  if (err && !st) return <p style={{ color: C.warn }}>{err}</p>;
+  if (!st) return <p style={{ color: C.muted }}>Loading…</p>;
+
+  const canSign = ack && typedName.trim().length >= 3;
+  return (
+    <div style={{ maxWidth: 820 }}>
+      <div style={{ ...display, fontWeight: 700, fontSize: 22, textTransform: "uppercase", color: C.bronzeLight }}>Instructor Agreement &amp; W-9</div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", margin: "10px 0 4px" }}>
+        <span style={{ ...mono, fontSize: 12, padding: "4px 10px", background: st.signedAt ? "#1C2A21" : "#2E1F16", color: st.signedAt ? C.ok : C.warn, border: `1px solid ${st.signedAt ? C.ok : C.warn}` }}>
+          {st.signedAt ? `✓ Agreement signed ${new Date(st.signedAt).toLocaleDateString()}` : "Agreement not signed"}
+        </span>
+        <span style={{ ...mono, fontSize: 12, padding: "4px 10px", background: st.w9UploadedAt ? "#1C2A21" : "#2E1F16", color: st.w9UploadedAt ? C.ok : C.warn, border: `1px solid ${st.w9UploadedAt ? C.ok : C.warn}` }}>
+          {st.w9UploadedAt ? `✓ W-9 on file (${st.w9Name})` : "W-9 not uploaded"}
+        </span>
+      </div>
+      <p style={{ color: C.muted, fontSize: 13, lineHeight: 1.6 }}>Both are required before commission payments can be issued.</p>
+
+      <div style={{ background: C.panel, border: `1px solid ${C.line}`, padding: "18px 20px", marginTop: 6 }}>
+        <div style={{ ...display, fontWeight: 700, fontSize: 17, textTransform: "uppercase", color: C.bronzeLight }}>Instructor Agreement <span style={{ ...mono, fontSize: 11, color: C.muted }}>v{st.docs.version}</span></div>
+        <div style={{ maxHeight: 320, overflowY: "auto", paddingRight: 8, marginTop: 6 }}>
+          {st.docs.agreement.map(([h, t], i) => (
+            <p key={i} style={{ fontSize: 13, lineHeight: 1.65, color: C.text, margin: "8px 0 0" }}><strong style={{ color: C.bronzeLight }}>{h}.</strong> {t}</p>
+          ))}
+        </div>
+        {!st.signedAt && (
+          <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 14, paddingTop: 14, display: "grid", gap: 10 }}>
+            <label style={{ display: "flex", gap: 10, fontSize: 14, color: C.text, lineHeight: 1.5, cursor: "pointer" }}>
+              <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} style={{ marginTop: 3 }} />
+              <span>I have read and agree to this Instructor Agreement, including the consent to sign electronically.</span>
+            </label>
+            <div>
+              <FieldLabel>Type your full legal name as your electronic signature</FieldLabel>
+              <input value={typedName} onChange={(e) => setTypedName(e.target.value)} placeholder={user.name}
+                style={{ width: "100%", padding: "12px 14px", border: `1px solid ${C.line}`, fontSize: 18, fontStyle: "italic", background: C.panel2, color: C.bronzeLight, boxSizing: "border-box", fontFamily: "Georgia, serif" }} />
+            </div>
+            {err && <div style={{ ...mono, fontSize: 12, color: C.warn }}>{err}</div>}
+            <Btn onClick={sign} disabled={!canSign || busy}>{busy ? "Signing…" : "Sign the agreement"}</Btn>
+            <div style={{ ...mono, fontSize: 11, color: C.muted }}>Your signature is recorded with the date, time, and network details of this submission.</div>
+          </div>
+        )}
+        {st.signedAt && <p style={{ fontSize: 13, color: C.muted, marginTop: 12 }}>A signed copy was emailed to you for your records.</p>}
+      </div>
+
+      <div style={{ background: C.panel, border: `1px solid ${C.line}`, padding: "18px 20px", marginTop: 14 }}>
+        <div style={{ ...display, fontWeight: 700, fontSize: 17, textTransform: "uppercase", color: C.bronzeLight }}>IRS Form W-9</div>
+        <p style={{ fontSize: 13, color: C.muted, lineHeight: 1.6 }}>
+          Download the official form, fill it out and sign it, then upload the completed PDF here. It attaches securely to your instructor file — only administrators can view it.
+        </p>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <a href="https://www.irs.gov/pub/irs-pdf/fw9.pdf" target="_blank" rel="noreferrer"
+            style={{ ...mono, fontSize: 12, color: C.bronze, border: `1px solid ${C.bronzeDark}`, padding: "8px 14px", textDecoration: "none" }}>Download blank W-9 (irs.gov) ↗</a>
+          <label style={{ ...mono, fontSize: 12, color: "#1A1509", background: C.bronze, padding: "8px 14px", cursor: "pointer", fontWeight: 700 }}>
+            {w9Busy ? "Uploading…" : st.w9UploadedAt ? "Replace W-9 (PDF)" : "Upload completed W-9 (PDF)"}
+            <input type="file" accept="application/pdf" onChange={onW9} style={{ display: "none" }} disabled={w9Busy} />
+          </label>
+        </div>
+        {w9Msg && <div style={{ ...mono, fontSize: 12, color: w9Msg.ok ? C.ok : C.warn, marginTop: 10 }}>{w9Msg.text}</div>}
+      </div>
+    </div>
+  );
+}
+
+
+/* ---------- Instructor portal: view a signed form record ---------- */
+function WaiverViewModal({ token, studentName, onClose }) {
+  const [rec, setRec] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => {
+    (async () => {
+      try { setRec(await apiGet(`waiver?token=${encodeURIComponent(token)}`)); }
+      catch (e) { setErr(e.local ? "Signed forms are stored on the live site." : e.message); }
+    })();
+  }, [token]);
+  return (
+    <Modal title={`Signed forms — ${studentName}`} onClose={onClose}>
+      {err && <p style={{ color: C.warn }}>{err}</p>}
+      {!rec && !err && <p style={{ color: C.muted }}>Loading…</p>}
+      {rec && (
+        <div style={{ maxHeight: "60vh", overflowY: "auto", paddingRight: 6 }}>
+          <div style={{ background: "#1C2A21", border: `1px solid ${C.ok}`, padding: "12px 14px", fontSize: 13, color: C.text, lineHeight: 1.7 }}>
+            <strong style={{ color: C.ok }}>Electronically signed:</strong> {rec.typedSignature}<br />
+            <span style={{ ...mono, fontSize: 12, color: C.muted }}>
+              {new Date(rec.signedAt).toLocaleString()} · Ref {rec.ref} · Doc v{rec.docVersion}{rec.ip ? ` · IP ${rec.ip}` : ""}
+            </span>
+          </div>
+          {[["Range Safety Briefing", rec.briefing], ["Release and Waiver of Liability", rec.waiver]].map(([title, sections]) => (
+            <div key={title} style={{ marginTop: 14 }}>
+              <div style={{ ...display, fontWeight: 700, fontSize: 16, textTransform: "uppercase", color: C.bronzeLight }}>{title}</div>
+              {sections.map(([h, t], i) => (
+                <p key={i} style={{ fontSize: 13, lineHeight: 1.65, color: C.text, margin: "8px 0 0" }}><strong style={{ color: C.bronzeLight }}>{h}.</strong> {t}</p>
+              ))}
+            </div>
+          ))}
+          <div style={{ marginTop: 14 }}><Btn small ghost onClick={() => window.print()}>Print / Save as PDF</Btn></div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 function RosterPrintModal({ cls, onClose }) {
   const ink = "#2B2415";
   const bronze = "#8F6F2E";
@@ -3316,7 +3639,7 @@ function AdminVideos({ media, updateMedia }) {
     setEditingId(null);
   };
 
-  const remove = async (id) => updateMedia({ ...media, videos: media.videos.filter((v) => v.id !== id) });
+  const remove = async (id) => updateMedia({ ...media, videos: media.videos.filter((v) => v.id !== id), ...(media.homeVideoId === id ? { homeVideoId: "" } : {}) });
 
   const smallBtn = { ...mono, fontSize: 12, background: "none", border: `1px solid ${C.bronzeDark}`, color: C.bronze, padding: "4px 9px", cursor: "pointer", borderRadius: 2 };
 
@@ -3329,7 +3652,7 @@ function AdminVideos({ media, updateMedia }) {
         <Field label="Video link (YouTube or Vimeo)" value={f.url} onChange={(e) => setF({ ...f, url: e.target.value })} mono placeholder="https://www.youtube.com/watch?v=…" />
         {err && <div style={{ ...mono, fontSize: 12, color: C.warn }}>{err}</div>}
         <Btn small onClick={add}>Add video</Btn>
-        <div style={{ ...mono, fontSize: 11, color: C.muted }}>Regular YouTube/Vimeo links are converted to players automatically.</div>
+        <div style={{ ...mono, fontSize: 11, color: C.muted }}>Regular YouTube/Vimeo links are converted to players automatically. Direct video file links (.mp4, .webm) play in a built-in viewer. Use "Set as Home page video" to feature one on the Home page.</div>
       </div>
 
       {/* video list */}
@@ -3357,8 +3680,16 @@ function AdminVideos({ media, updateMedia }) {
                   </>
                 ) : (
                   <>
-                    <div style={{ ...mono, fontSize: 11, color: C.muted }}>{v.title || "(no title)"} · {v.url}</div>
-                    <div style={{ display: "flex", gap: 6 }}>
+                    <div style={{ ...mono, fontSize: 11, color: C.muted }}>
+                      {media.homeVideoId === v.id && <span style={{ background: C.bronze, color: "#1A1509", padding: "2px 7px", marginRight: 8, fontWeight: 700, letterSpacing: "0.08em" }}>HOME PAGE</span>}
+                      {v.title || "(no title)"} · {v.url}
+                    </div>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {media.homeVideoId === v.id ? (
+                        <button onClick={() => updateMedia({ ...media, homeVideoId: "" })} style={{ ...smallBtn, border: `1px solid ${C.line}`, color: C.muted }}>Remove from Home page</button>
+                      ) : (
+                        <button onClick={() => updateMedia({ ...media, homeVideoId: v.id })} style={smallBtn}>Set as Home page video</button>
+                      )}
                       <button onClick={() => { setEditingId(v.id); setEf({ title: v.title || "", url: v.url }); }} style={smallBtn}>Edit</button>
                       <button onClick={() => remove(v.id)} style={{ ...smallBtn, border: `1px solid ${C.line}`, color: C.warn }}>Delete</button>
                     </div>
@@ -3440,8 +3771,11 @@ function UserList({ title, all, saveCerts, accounts, type }) {
   const rows = all.filter((c) => (isInstr ? c.type === "instructor" : c.type !== "instructor")).map((c) => {
     const acct = accountFor(c.email);
     return { ...c, status: new Date(c.expires) < new Date() ? "Expired" : "Valid",
-      company: acct ? acct.company || "" : "", hasAccount: acct ? "Yes" : "No" };
+      company: acct ? acct.company || "" : "", hasAccount: acct ? "Yes" : "No",
+      agreement: acct && acct.agreementSignedAt ? new Date(acct.agreementSignedAt).toLocaleDateString() : "",
+      w9: acct && acct.w9UploadedAt ? "on file" : "" };
   });
+  const [docView, setDocView] = useState(null);
 
   const [sort, setSort] = useState({ key: "issued", dir: "desc" });
   const [editingId, setEditingId] = useState(null);
@@ -3460,13 +3794,13 @@ function UserList({ title, all, saveCerts, accounts, type }) {
 
   const COLS = [
     ["certId", "CERT ID"], ["name", "NAME"], ["email", "EMAIL"], ["phone", "PHONE"],
-    ...(isInstr ? [["company", "COMPANY"], ["hasAccount", "ACCOUNT"]] : []),
+    ...(isInstr ? [["company", "COMPANY"], ["hasAccount", "ACCOUNT"], ["agreement", "AGREEMENT"], ["w9", "W-9"]] : []),
     ["classId", "CLASS"], ["issued", "CERTIFIED"], ["expires", "EXPIRES"], ["status", "STATUS"],
   ];
 
   const exportRows = () => sorted.map((r) => {
     const base = { "Cert ID": r.certId, "Name": r.name, "Email": r.email, "Phone": r.phone || "" };
-    if (isInstr) { base["Company"] = r.company; base["Has Portal Account"] = r.hasAccount; }
+    if (isInstr) { base["Company"] = r.company; base["Has Portal Account"] = r.hasAccount; base["Agreement Signed"] = r.agreement || ""; base["W-9 On File"] = r.w9 ? "Yes" : "No"; }
     return { ...base, "Class": r.classId, "Date Certified": r.issued, "Expiration": r.expires, "Status": r.status };
   });
 
@@ -3498,6 +3832,7 @@ function UserList({ title, all, saveCerts, accounts, type }) {
   return (
     <div>
       {printOpen && <AdminPrintModal title={title} columns={COLS.map(([k, l]) => [k, l])} rows={sorted} onClose={() => setPrintOpen(false)} />}
+      {docView && <InstructorDocModal doc={docView} onClose={() => setDocView(null)} />}
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
         <div style={{ ...display, fontWeight: 700, fontSize: 22, textTransform: "uppercase", color: C.bronzeLight }}>{title}</div>
         <span style={{ ...mono, fontSize: 12, color: C.muted }}>{rows.length} · click headers to sort</span>
@@ -3533,6 +3868,16 @@ function UserList({ title, all, saveCerts, accounts, type }) {
                     <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}` }}>{c.phone || "—"}</td>
                     {isInstr && <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}` }}>{c.company || "—"}</td>}
                     {isInstr && <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}` }}>{c.hasAccount}</td>}
+                    {isInstr && <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12 }}>
+                      {c.agreement
+                        ? <button onClick={() => setDocView({ kind: "agreement", email: c.email, name: c.name })} style={{ background: "none", border: "none", color: C.ok, cursor: "pointer", fontFamily: "inherit", fontSize: 12, padding: 0, textDecoration: "underline" }}>{"\u2713"} {c.agreement}</button>
+                        : <span style={{ color: C.warn }}>{"\u2014"}</span>}
+                    </td>}
+                    {isInstr && <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12 }}>
+                      {c.w9
+                        ? <button onClick={() => setDocView({ kind: "w9", email: c.email, name: c.name })} style={{ background: "none", border: "none", color: C.ok, cursor: "pointer", fontFamily: "inherit", fontSize: 12, padding: 0, textDecoration: "underline" }}>{"\u2713"} view</button>
+                        : <span style={{ color: C.warn }}>{"\u2014"}</span>}
+                    </td>}
                     <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12 }}>{c.classId}</td>
                     <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12 }}>{c.issued}</td>
                     <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12 }}>{c.expires}</td>

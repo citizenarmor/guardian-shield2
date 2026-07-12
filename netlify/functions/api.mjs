@@ -4,6 +4,7 @@
 // certificate verification). Data lives in Netlify Blobs.
 import { getStore } from "@netlify/blobs";
 import crypto from "node:crypto";
+import { runReminders } from "./reminders.mjs";
 
 /* ================= configuration =================
    Set these in Netlify: Site configuration → Environment variables
@@ -109,6 +110,44 @@ const SEED_CLASSES = [
   { id: "GS-G7H8I9", type: "instructor", date: "2026-09-12", time: "7:30 AM", location: "Guardian HQ", city: "Denver", state: "CO", seats: 8, price: 1250, instructor: "Lead Cadre", enrolled: [], completed: false },
 ];
 
+/* ================= required forms (versioned) ================= */
+const DOC_VERSION = "2026-07-12";
+const RANGE_BRIEFING = [
+  ["Universal Firearm Safety Rules", "1. Treat every firearm as if it is loaded at all times. 2. Never point the muzzle at anything you are not willing to destroy. 3. Keep your finger off the trigger and outside the trigger guard until your sights are on target and you have made the decision to shoot. 4. Be sure of your target, what is in line with it, and what is beyond it."],
+  ["Range Commands", "All participants must know and obey these commands immediately: \"RANGE IS HOT\" — shooting may begin; \"CEASE FIRE\" — stop shooting immediately, remove finger from trigger, hold position and await instruction (anyone may call a cease fire at any time for a safety concern); \"UNLOAD AND SHOW CLEAR\" — remove magazine, lock slide/action open, present for inspection; \"RANGE IS COLD\" — firearms benched and untouched, actions open, no handling while anyone is downrange."],
+  ["Muzzle and Handling Discipline", "Muzzles remain pointed downrange or in a designated safe direction at all times. Firearms are loaded only on the firing line on the instructor's command. Never handle a firearm while anyone is forward of the firing line. If a firearm malfunctions, keep it pointed downrange and raise your support hand for an instructor."],
+  ["Personal Protective Equipment", "Eye protection and hearing protection are mandatory for everyone on or near the range whenever the range is hot. Closed-toe footwear is required. Hats with brims and high-neck shirts are strongly recommended to protect against ejected brass."],
+  ["Physical and Medical Readiness", "Participants must not be under the influence of alcohol, cannabis, or any drug or medication that impairs judgment or coordination. Inform an instructor privately before training of any medical condition that could affect your safe participation (including pregnancy, heart conditions, seizure disorders, or recent injuries)."],
+  ["Instructor Authority", "The Range Safety Officer and instructors have final authority on all safety matters. Any participant may be removed from the range, without refund, for unsafe firearm handling, failure to follow commands, or conduct that endangers any person."],
+];
+const LIABILITY_WAIVER = [
+  ["Acknowledgment of Inherent Risk", "I understand that participation in the Guardian Rapid Response Shield training program (the \"Program\"), operated by The Armored Citizen, LLC dba Guardian Shield Training (the \"Company\"), involves live-fire firearms training, physical movement, simulated defensive scenarios, and the use of ballistic protective equipment. I acknowledge that these activities carry inherent risks that cannot be eliminated regardless of the care taken, including but not limited to: discharge of firearms, ricochet, flying debris and ejected casings, hearing or vision damage, physical injury from movement or falls, equipment failure, and, in extreme cases, permanent disability or death."],
+  ["Voluntary Assumption of Risk", "I am participating in the Program voluntarily. I knowingly and freely assume all risks of injury, illness, damage, or loss, both known and unknown, arising from or related to my participation, even if arising from the negligence of the Company, its owners, employees, instructors, agents, or other participants, and I assume full responsibility for my participation."],
+  ["Release and Waiver of Liability", "In consideration of being permitted to participate, I, for myself and on behalf of my heirs, assigns, personal representatives, and next of kin, hereby release, indemnify, and hold harmless the Company, its owners, members, officers, employees, instructors, contractors, and agents, and the owners and operators of the facility at which training occurs, from and against any and all claims, demands, losses, damages, and causes of action of any kind arising out of or related to my participation in the Program, to the fullest extent permitted by law."],
+  ["Firearm Competency and Legal Eligibility", "I represent that I am at least 18 years of age (21 where required for the firearm used), that I am legally permitted to possess and handle the firearm I bring to training under all applicable federal, state, and local laws, and that any firearm and ammunition I bring is in safe working condition."],
+  ["Medical Treatment Authorization", "I authorize the Company and its instructors to secure emergency medical treatment on my behalf if I am injured and unable to direct my own care. I understand I am financially responsible for any such treatment."],
+  ["Rules Compliance", "I agree to comply with the Range Safety Briefing, all posted facility rules, and all instructions given by instructors and Range Safety Officers. I understand that failure to comply may result in immediate removal from the Program without refund."],
+  ["Severability and Governing Law", "If any portion of this agreement is held invalid, the remainder shall continue in full force and effect. This agreement is governed by the laws of the State of Utah."],
+  ["Electronic Signature Consent", "I consent to sign this document electronically and agree that my electronic signature, together with the recorded date, time, and network details of my submission, has the same legal effect as a handwritten signature."],
+];
+
+/* ================= Instructor Agreement (versioned) ================= */
+const AGREEMENT_VERSION = "2026-07-12";
+const INSTRUCTOR_AGREEMENT = [
+  ["Engagement", "This Instructor Agreement (the \"Agreement\") is between The Armored Citizen, LLC dba Guardian Shield Training (the \"Company\") and the undersigned instructor (the \"Instructor\"). The Company engages the Instructor to deliver Guardian Rapid Response Shield certification training to registered students at classes scheduled through the Company's platform."],
+  ["Certification Requirement", "The Instructor must hold and maintain a current Guardian Instructor certification issued through the Company's Instructor Certification Course. Certification lapses, revocation, or failure to maintain program standards suspends this Agreement automatically until certification is restored."],
+  ["Independent Contractor Status", "The Instructor is an independent contractor, not an employee, partner, or agent of the Company. The Instructor controls the manner and means of delivering instruction within program safety standards, provides their own transportation, and is not entitled to employee benefits. The Instructor is solely responsible for all federal, state, and local taxes on compensation received, and must provide the Company a completed IRS Form W-9 before receiving any payment. The Company will report payments as required by law, including on IRS Form 1099-NEC where applicable."],
+  ["Compensation", "The Instructor is compensated by commission on paid student registrations for classes they instruct, at the per-student rates recorded in the Company's commission system, as amended from time to time with notice. Commissions are payable per the Company's payout schedule, accompanied by an itemized commission statement. No commission is owed on refunded or cancelled registrations."],
+  ["Safety Standards and Conduct", "The Instructor agrees to conduct all training in accordance with the Company's Range Safety Briefing, program curriculum, and all applicable laws and facility rules; to verify that every participating student has a signed Range Safety Briefing and Liability Waiver before live-fire participation; and to hold final on-range safety authority, including removing unsafe participants. The Instructor will immediately report any injury, discharge-related incident, or near miss to the Company."],
+  ["Insurance", "The Instructor is strongly encouraged, and may be required upon notice, to maintain professional liability insurance covering firearms instruction, and shall provide proof of coverage on request."],
+  ["Brand Use", "The Company grants the Instructor a limited, revocable, non-exclusive license to use the Guardian Shield Training name and marks solely to promote and deliver classes scheduled through the Company's platform. All goodwill inures to the Company. This license ends with this Agreement."],
+  ["Confidentiality", "The Instructor will not disclose or misuse non-public Company information, including student personal information, pricing, commission structures, and training materials, during or after the term of this Agreement, except as required by law."],
+  ["Indemnification", "Each party shall indemnify the other against third-party claims arising from its own negligence or willful misconduct. The Instructor additionally agrees to indemnify the Company against claims arising from instruction delivered outside program safety standards or outside the scope of this Agreement."],
+  ["Term and Termination", "This Agreement begins on the date signed and continues until terminated. Either party may terminate with thirty (30) days' written notice. The Company may terminate immediately for safety violations, loss of certification, unlawful conduct, or material breach. Earned, unpaid commissions for completed classes survive termination."],
+  ["General", "This Agreement is the entire agreement between the parties on its subject, supersedes prior discussions, may be amended only in writing, and is governed by the laws of the State of Utah. If any provision is held invalid, the remainder continues in effect."],
+  ["Electronic Signature Consent", "The Instructor consents to executing this Agreement electronically and agrees that their electronic signature, with the recorded date, time, and network details, has the same legal effect as a handwritten signature."],
+];
+
 /* ================= email (Resend) ================= */
 async function sendEmail(to, subject, bodyHtml) {
   if (!RESEND_KEY) return { skipped: true };
@@ -117,8 +156,8 @@ async function sendEmail(to, subject, bodyHtml) {
       <div style="padding:22px 26px;border-bottom:1px solid #3A3527;">
         <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
           <td style="padding-right:16px;vertical-align:middle;">
-            <img src="https://guardianshield.training/email-logo.png" width="60" height="60" alt="Guardian Rapid Response Shield"
-              style="display:block;border-radius:50%;border:2px solid #8F6F2E;" />
+            <img src="https://guardianshield.training/email-logo.png" width="88" height="88" alt="Guardian Rapid Response Shield"
+              style="display:block;width:88px;height:88px;border-radius:50%;border:3px solid #8F6F2E;" />
           </td>
           <td style="vertical-align:middle;">
             <div style="color:#C9A45C;font-size:11px;letter-spacing:3px;font-family:Courier,monospace;">GUARDIAN SHIELD TRAINING</div>
@@ -197,6 +236,7 @@ async function finalizeRegistration({ classId, student, discountCode, passcode, 
     name: student.name.trim(), email: student.email.trim(), phone: (student.phone || "").trim(),
     company: (student.company || "").trim(),
     ref: "REG-" + uid(), registeredAt: new Date().toISOString(),
+    signToken: uid() + uid() + uid(),
     discountCode: discountCode || "", paid: paidAmount,
     ...(paymentRef ? { paymentRef } : {}),
   };
@@ -225,7 +265,12 @@ async function finalizeRegistration({ classId, student, discountCode, passcode, 
         Amount paid: $${paidAmount.toFixed(2)}${discountCode ? ` (code ${esc(discountCode)})` : ""}<br>
         Registration reference: <strong style="color:#C9A45C;">${record.ref}</strong>
       </p>
-      <p>Bring a valid ID${cls.type === "instructor" ? "" : " and your own firearm for Day 1 live-fire training"}. The range safety briefing and liability waiver are completed on-site before training begins.</p>`);
+      <p>Bring a valid ID${cls.type === "instructor" ? "" : " and your own firearm for Day 1 live-fire training"}.</p>
+      <p><strong>Required before class:</strong> please review and electronically sign your Range Safety Briefing and Liability Waiver:</p>
+      <p style="text-align:center;margin:20px 0 8px;">
+        <a href="https://guardianshield.training/?sign=${record.signToken}"
+           style="background:#C9A45C;color:#1A1509;text-decoration:none;font-weight:bold;font-size:15px;padding:13px 28px;border-radius:2px;display:inline-block;">Review &amp; Sign Required Forms &rarr;</a>
+      </p>`);
 
     const accounts = await getAccounts();
     const instr = accounts.find((a) => a.role === "instructor" && a.name.toLowerCase() === (cls.instructor || "").toLowerCase());
@@ -416,7 +461,7 @@ async function handleAuth(req, path, body) {
     const sess = await getSession(req);
     if (!sess || sess.role !== "admin") return bad("Admin access required.", 403);
     const accounts = await getAccounts();
-    return json({ accounts: accounts.map((a) => ({ ...publicAccount(a), twofa: a.twofa, created: a.created })) });
+    return json({ accounts: accounts.map((a) => ({ ...publicAccount(a), twofa: a.twofa, created: a.created, agreementSignedAt: a.agreementSignedAt || null, w9UploadedAt: a.w9UploadedAt || null, w9Name: a.w9Name || "" })) });
   }
 
   /* ---- admin: set a temporary password for any account ---- */
@@ -738,7 +783,13 @@ export default async (req) => {
         <p>Your application to become a Guardian Instructor has been <strong style="color:#6FBF8F;">approved</strong>.</p>
         <p>Next step: register for an upcoming <strong>Instructor Certification Course</strong> on the Class Schedule page at guardianshield.training. At registration, enter your personal approval passcode:</p>
         <p style="background:#242017;border:1px solid #C9A45C;padding:14px 16px;text-align:center;font-family:Courier,monospace;font-size:20px;color:#E3CD96;letter-spacing:2px;">${esc(app.passcode)}</p>
-        <p>This passcode is valid for one course registration.</p>`);
+        <p>This passcode is valid for one course registration.</p>
+        <p style="text-align:center;margin:24px 0 8px;">
+          <a href="https://guardianshield.training/?view=schedule"
+             style="background:#C9A45C;color:#1A1509;text-decoration:none;font-weight:bold;font-size:15px;padding:13px 28px;border-radius:2px;display:inline-block;">
+            View the Class Schedule &rarr;
+          </a>
+        </p>`);
       if (result.skipped) return json({ ok: true, emailed: false, reason: "Email service not configured." });
       if (result.error) return bad("Email failed to send: " + result.error, 502);
       app.approvalEmailedAt = new Date().toISOString();
@@ -794,6 +845,176 @@ export default async (req) => {
       p.statementEmailedTo = recipients.join(", ");
       await writeJson("gs:payments", payments);
       return json({ emailed: true, to: recipients });
+    }
+    if (path === "agreement-status") {
+      const sess = await getSession(req);
+      if (!sess || sess.role !== "instructor") return bad("Instructor sign-in required.", 403);
+      const rec = await readJson(`gs:agreement:${sess.email.toLowerCase()}`, null);
+      const w9 = await readJson(`gs:w9:${sess.email.toLowerCase()}`, null);
+      return json({
+        signedAt: rec ? rec.signedAt : null,
+        w9UploadedAt: w9 ? w9.uploadedAt : null, w9Name: w9 ? w9.fileName : "",
+        docs: { version: AGREEMENT_VERSION, agreement: INSTRUCTOR_AGREEMENT },
+      });
+    }
+
+    if (path === "sign-agreement" && req.method === "POST") {
+      const sess = await getSession(req);
+      if (!sess || sess.role !== "instructor") return bad("Instructor sign-in required.", 403);
+      const { typedName } = body;
+      if (!typedName || typedName.trim().length < 3) return bad("Please type your full legal name as your signature.");
+      const key = `gs:agreement:${sess.email.toLowerCase()}`;
+      const existing = await readJson(key, null);
+      if (existing) return json({ ok: true, alreadySigned: true, signedAt: existing.signedAt });
+      const signedAt = new Date().toISOString();
+      const accounts = await getAccounts();
+      const account = findAccount(accounts, sess.email);
+      const record = {
+        instructorName: account ? account.name : sess.name, instructorEmail: sess.email,
+        company: account ? account.company || "" : "",
+        typedSignature: typedName.trim(), signedAt, docVersion: AGREEMENT_VERSION,
+        ip: req.headers.get("x-nf-client-connection-ip") || req.headers.get("x-forwarded-for") || "",
+        userAgent: req.headers.get("user-agent") || "",
+        agreement: INSTRUCTOR_AGREEMENT,
+      };
+      await writeJson(key, record);
+      if (account) { account.agreementSignedAt = signedAt; await saveAccounts(accounts); }
+      try {
+        const agrHtml = INSTRUCTOR_AGREEMENT.map(([h, t]) => `<p style="margin:8px 0;"><strong>${esc(h)}.</strong> ${esc(t)}</p>`).join("");
+        await sendEmail(sess.email, "Your signed Instructor Agreement", `
+          <p>Hi ${esc((account ? account.name : sess.name).split(" ")[0])},</p>
+          <p>This is your copy of the Instructor Agreement you signed with The Armored Citizen, LLC dba Guardian Shield Training. Keep it for your records.</p>
+          ${agrHtml}
+          <p style="background:#242017;border:1px solid #C9A45C;padding:12px 16px;margin-top:18px;">
+            <strong>Electronically signed by:</strong> ${esc(record.typedSignature)}<br>
+            Date &amp; time: ${new Date(signedAt).toLocaleString("en-US", { timeZone: "America/Denver" })} (Mountain)<br>
+            Document version: ${AGREEMENT_VERSION}
+          </p>
+          <p>Reminder: please also upload your completed IRS Form W-9 in the Instructor Portal if you haven't yet — it's required before commission payments can be issued.</p>`);
+        if (ADMIN_NOTIFY) await sendEmail(ADMIN_NOTIFY, "Instructor Agreement signed", `
+          <p><strong>${esc(record.instructorName)}</strong>${record.company ? " (" + esc(record.company) + ")" : ""} signed the Instructor Agreement (v${AGREEMENT_VERSION}).</p>
+          <p>View it in the Admin Portal → Users → Instructors.</p>`);
+      } catch (e) { console.error("agreement email error:", e); }
+      return json({ ok: true, signedAt });
+    }
+
+    if (path === "upload-w9" && req.method === "POST") {
+      const sess = await getSession(req);
+      if (!sess || sess.role !== "instructor") return bad("Instructor sign-in required.", 403);
+      const { fileName, dataUrl } = body;
+      if (!fileName || !dataUrl || !dataUrl.startsWith("data:application/pdf;base64,")) return bad("Please upload your completed W-9 as a PDF file.");
+      if (dataUrl.length > 5.6 * 1024 * 1024) return bad("That file is too large — please keep the W-9 under 4 MB.");
+      const uploadedAt = new Date().toISOString();
+      await writeJson(`gs:w9:${sess.email.toLowerCase()}`, { fileName: fileName.slice(0, 120), dataUrl, uploadedAt, instructorEmail: sess.email });
+      const accounts = await getAccounts();
+      const account = findAccount(accounts, sess.email);
+      if (account) { account.w9UploadedAt = uploadedAt; account.w9Name = fileName.slice(0, 120); await saveAccounts(accounts); }
+      if (ADMIN_NOTIFY) {
+        try {
+          await sendEmail(ADMIN_NOTIFY, "W-9 uploaded", `
+            <p><strong>${esc(account ? account.name : sess.email)}</strong> uploaded a completed W-9 (${esc(fileName)}).</p>
+            <p>For security, the form itself is not attached — view or download it in the Admin Portal → Users → Instructors.</p>`);
+        } catch (e) { console.error("w9 email error:", e); }
+      }
+      return json({ ok: true, uploadedAt });
+    }
+
+    if (path === "agreement") {
+      const sess = await getSession(req);
+      if (!sess || sess.role !== "admin") return bad("Admin access required.", 403);
+      const rec = await readJson(`gs:agreement:${(url.searchParams.get("email") || "").toLowerCase()}`, null);
+      if (!rec) return bad("No signed agreement found.", 404);
+      return json(rec);
+    }
+
+    if (path === "w9") {
+      const sess = await getSession(req);
+      if (!sess || sess.role !== "admin") return bad("Admin access required.", 403);
+      const rec = await readJson(`gs:w9:${(url.searchParams.get("email") || "").toLowerCase()}`, null);
+      if (!rec) return bad("No W-9 on file.", 404);
+      return json(rec);
+    }
+
+    if (path === "sign-info") {
+      const token = url.searchParams.get("token") || "";
+      if (token.length < 10) return bad("Invalid signing link.", 400);
+      const classes = await readJson("gs:classes", []);
+      for (const c of classes) {
+        const st = (c.enrolled || []).find((e) => e.signToken === token);
+        if (st) {
+          return json({
+            student: { name: st.name, email: st.email, ref: st.ref },
+            cls: { date: c.date, time: c.time, location: c.location, city: c.city || "", state: c.state || "", instructor: c.instructor, type: c.type },
+            docs: { version: DOC_VERSION, briefing: RANGE_BRIEFING, waiver: LIABILITY_WAIVER },
+            signedAt: st.waiverSignedAt || null,
+          });
+        }
+      }
+      return bad("This signing link is not valid or the registration was cancelled.", 404);
+    }
+
+    if (path === "sign" && req.method === "POST") {
+      const { token, typedName } = body;
+      if (!token || token.length < 10) return bad("Invalid signing link.", 400);
+      if (!typedName || typedName.trim().length < 3) return bad("Please type your full legal name as your signature.");
+      const classes = await readJson("gs:classes", []);
+      for (const c of classes) {
+        const st = (c.enrolled || []).find((e) => e.signToken === token);
+        if (!st) continue;
+        if (st.waiverSignedAt) return json({ ok: true, alreadySigned: true, signedAt: st.waiverSignedAt });
+        const signedAt = new Date().toISOString();
+        const record = {
+          token, classId: c.id, ref: st.ref,
+          studentName: st.name, studentEmail: st.email,
+          typedSignature: typedName.trim(), signedAt,
+          docVersion: DOC_VERSION,
+          ip: req.headers.get("x-nf-client-connection-ip") || req.headers.get("x-forwarded-for") || "",
+          userAgent: req.headers.get("user-agent") || "",
+          briefing: RANGE_BRIEFING, waiver: LIABILITY_WAIVER,
+        };
+        await writeJson(`gs:waiver:${token}`, record);
+        st.waiverSignedAt = signedAt;
+        await writeJson("gs:classes", classes);
+
+        const notices = await readJson("gs:notices", []);
+        const place = [c.location, [c.city, c.state].filter(Boolean).join(", ")].filter(Boolean).join(" — ");
+        notices.unshift({ id: uid(), when: new Date().toLocaleString("en-US", { timeZone: "America/Denver" }), classId: c.id, read: false,
+          text: `Forms signed — ${st.name} electronically signed the Range Safety Briefing and Liability Waiver for the ${c.date} class at ${place}.` });
+        await writeJson("gs:notices", notices);
+
+        try {
+          const docsHtml = (title, sections) => `<h3 style="color:#C9A45C;font-size:15px;margin:18px 0 6px;">${title}</h3>` +
+            sections.map(([h, t]) => `<p style="margin:8px 0;"><strong>${esc(h)}.</strong> ${esc(t)}</p>`).join("");
+          await sendEmail(st.email, "Your signed training forms", `
+            <p>Hi ${esc(st.name.split(" ")[0])},</p>
+            <p>This is your copy of the forms you electronically signed for your class on <strong>${esc(c.date)}</strong> at ${esc(place)}. Keep it for your records.</p>
+            ${docsHtml("Range Safety Briefing", RANGE_BRIEFING)}
+            ${docsHtml("Release and Waiver of Liability", LIABILITY_WAIVER)}
+            <p style="background:#242017;border:1px solid #C9A45C;padding:12px 16px;margin-top:18px;">
+              <strong>Electronically signed by:</strong> ${esc(record.typedSignature)}<br>
+              Date &amp; time: ${new Date(signedAt).toLocaleString("en-US", { timeZone: "America/Denver" })} (Mountain)<br>
+              Registration: ${st.ref} · Document version: ${DOC_VERSION}
+            </p>`);
+        } catch (e) { console.error("signed-copy email error:", e); }
+
+        return json({ ok: true, signedAt });
+      }
+      return bad("This signing link is not valid or the registration was cancelled.", 404);
+    }
+
+    if (path === "waiver") {
+      const sess = await getSession(req);
+      if (!sess) return bad("Sign in required.", 403);
+      const token = url.searchParams.get("token") || "";
+      const record = await readJson(`gs:waiver:${token}`, null);
+      if (!record) return bad("No signed form found.", 404);
+      return json(record);
+    }
+
+    if (path === "run-reminders" && req.method === "POST") {
+      const sess = await getSession(req);
+      if (!sess || sess.role !== "admin") return bad("Admin access required.", 403);
+      return json(await runReminders());
     }
     if (path === "email-status") {
       return json({
