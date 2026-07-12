@@ -614,7 +614,7 @@ async function handleStorage(req, key, sess) {
   //  - instructors: full app data (classes, certs, apps, notices, codes, requests, resumes)
   //  - admins: media, plus reporting/user-management data (certs, classes, payments, settings)
   const instructorKeys = /^gs:(classes|certs|apps|notices|codes|requests|resume:.+)$/;
-  const adminKeys = /^gs:(media|certs|classes|payments|settings|apps|resume:.+)$/;
+  const adminKeys = /^gs:(media|certs|classes|payments|settings|apps|requests|codes|notices|resume:.+)$/;
 
   const canRead = sess.role === "instructor"
     ? key === "gs:media" || instructorKeys.test(key)

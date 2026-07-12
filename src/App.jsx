@@ -2196,8 +2196,6 @@ function Portal({ user, setUser, reloadData, accounts, updateAccounts, classes, 
     ["create", "Create a class"],
     ["notify", `Notifications${unread ? ` (${unread})` : ""}`],
     ["grads", "Graduate directory"],
-    ["requests", `Class requests${unreadReqs ? ` (${unreadReqs} new)` : ""}`],
-    ["codes", "Discount codes"],
     ["agreement", "My Agreement"],
   ];
 
@@ -2225,15 +2223,13 @@ function Portal({ user, setUser, reloadData, accounts, updateAccounts, classes, 
         {tab === "create" && <PortalCreate classes={classes} updateClasses={updateClasses} onCreated={() => setTab("classes")} instructorName={instrName} instructorCompany={user.company || ""} />}
         {tab === "notify" && <PortalNotices notices={notices} updateNotices={updateNotices} />}
         {tab === "grads" && <PortalGrads certs={certs} />}
-        {tab === "codes" && <PortalCodes codes={codes} updateCodes={updateCodes} instructorName={instrName} />}
         {tab === "agreement" && <PortalAgreement user={user} />}
-        {tab === "requests" && <PortalRequests requests={requests} updateRequests={updateRequests} />}
       </div>
     </div>
   );
 }
 
-function PortalClasses({ classes, updateClasses, certs, updateCerts }) {
+function PortalClasses({ classes, updateClasses, certs, updateCerts, isAdmin = false }) {
   const [filters, setFilters] = useState({ location: "all", instructor: "all", city: "all", state: "all", company: "all", sortBy: "date" });
   const sorted = applyClassFilters(classes, filters);
 
@@ -2277,6 +2273,11 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts }) {
     setEditingId(null);
   };
   const reinstate = async (id) => updateClasses(classes.map((c) => (c.id === id ? { ...c, cancelled: false } : c)));
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const deleteClass = async (id) => {
+    await updateClasses(classes.filter((c) => c.id !== id));
+    setConfirmDeleteId(null); setConfirmCancelId(null); setEditingId(null);
+  };
 
   const graduate = async (cls) => {
     if (enrolledN(cls) === 0) return;
@@ -2440,23 +2441,33 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts }) {
               <button onClick={() => setRosterFor(c)} style={btnStyle}>Print check-in roster</button>
             </div>
           )}
-          {!c.completed && (
-            <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
-              {!c.cancelled && editingId !== c.id && (
+          {(!c.completed || isAdmin) && (
+            <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap", alignItems: "center" }}>
+              {!c.completed && !c.cancelled && editingId !== c.id && (
                 <button onClick={() => startEdit(c)} style={btnStyle}>Edit class</button>
               )}
-              {!c.cancelled && confirmCancelId !== c.id && (
-                <button onClick={() => { setConfirmCancelId(c.id); setEditingId(null); }} style={{ ...btnStyle, border: `1px solid ${C.line}`, color: C.warn }}>Cancel class</button>
+              {!c.completed && !c.cancelled && confirmCancelId !== c.id && (
+                <button onClick={() => { setConfirmCancelId(c.id); setEditingId(null); setConfirmDeleteId(null); }} style={{ ...btnStyle, border: `1px solid ${C.line}`, color: C.warn }}>Cancel class</button>
               )}
-              {c.cancelled && (
+              {!c.completed && c.cancelled && (
                 <button onClick={() => reinstate(c.id)} style={btnStyle}>Reinstate class</button>
               )}
-              {enrolledN(c) > 0 && (
+              {!c.completed && enrolledN(c) > 0 && (
                 <button onClick={() => setRosterFor(c)} style={btnStyle}>Print check-in roster</button>
               )}
-              {!c.cancelled && enrolledN(c) > 0 && (
+              {!c.completed && !c.cancelled && enrolledN(c) > 0 && (
                 <Btn small onClick={() => graduate(c)}>Mark class complete & issue certifications</Btn>
               )}
+              {isAdmin && (confirmDeleteId === c.id ? (
+                <>
+                  <button onClick={() => deleteClass(c.id)} style={{ ...btnStyle, background: C.warn, color: "#14120D", border: `1px solid ${C.warn}`, fontWeight: 700 }}>Confirm delete class</button>
+                  <button onClick={() => setConfirmDeleteId(null)} style={{ ...btnStyle, color: C.muted, border: `1px solid ${C.line}` }}>Keep</button>
+                </>
+              ) : (
+                <button onClick={() => { setConfirmDeleteId(c.id); setConfirmCancelId(null); }} style={{ ...btnStyle, color: C.warn, border: `1px solid ${C.line}`, marginLeft: "auto" }}>
+                  Delete class{c.completed ? " (finished)" : ""}
+                </button>
+              ))}
             </div>
           )}
         </div>
@@ -2516,6 +2527,7 @@ function PortalCreate({ classes, updateClasses, onCreated, instructorName, instr
 
 function PortalNotices({ notices, updateNotices }) {
   const markAll = async () => updateNotices(notices.map((n) => ({ ...n, read: true })));
+  const removeNotice = async (id) => updateNotices(notices.filter((n) => n.id !== id));
   return (
     <div>
       {notices.length === 0 ? (
@@ -2525,9 +2537,15 @@ function PortalNotices({ notices, updateNotices }) {
           <div style={{ marginBottom: 12 }}><Btn small ghost onClick={markAll}>Mark all read</Btn></div>
           <div style={{ display: "grid", gap: 10 }}>
             {notices.map((n) => (
-              <div key={n.id} style={{ background: n.read ? C.panel : "#2A2415", border: `1px solid ${C.line}`, borderLeft: `4px solid ${n.read ? C.line : C.bronze}`, padding: "12px 16px" }}>
-                <div style={{ fontSize: 14, lineHeight: 1.5 }}>{n.text}</div>
-                <div style={{ ...mono, fontSize: 11, color: C.muted, marginTop: 4 }}>{n.when} · class {n.classId}</div>
+              <div key={n.id} style={{ background: n.read ? C.panel : "#2A2415", border: `1px solid ${C.line}`, borderLeft: `4px solid ${n.read ? C.line : C.bronze}`, padding: "12px 16px", display: "flex", gap: 12, alignItems: "flex-start" }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 14, lineHeight: 1.5 }}>{n.text}</div>
+                  <div style={{ ...mono, fontSize: 11, color: C.muted, marginTop: 4 }}>{n.when} · class {n.classId}</div>
+                </div>
+                <button onClick={() => removeNotice(n.id)} title="Delete notification"
+                  style={{ ...mono, fontSize: 12, background: "none", border: `1px solid ${C.line}`, color: C.warn, padding: "4px 9px", cursor: "pointer", borderRadius: 2, whiteSpace: "nowrap" }}>
+                  Delete
+                </button>
               </div>
             ))}
           </div>
@@ -3609,7 +3627,7 @@ function RosterPrintModal({ cls, onClose }) {
    ============================================================ */
 function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = [], media, updateMedia, go, inviteToken = null }) {
   const [tab, setTab] = useState("photos");
-  const [d, setD] = useState({ classes: [], certs: [], accounts: [], payments: [], settings: { commissionRate: 20 }, apps: [] });
+  const [d, setD] = useState({ classes: [], certs: [], accounts: [], payments: [], settings: { commissionRate: 20 }, apps: [], requests: [], codes: [] });
 
   const loadAll = async () => {
     const classes = await loadKey("gs:classes", []);
@@ -3617,6 +3635,8 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
     const payments = await loadKey("gs:payments", []);
     const settings = await loadKey("gs:settings", { commissionRate: 20 });
     const apps = await loadKey("gs:apps", []);
+    const requests = await loadKey("gs:requests", []);
+    const codes = await loadKey("gs:codes", []);
     let accs = [];
     try { const r = await apiGet("auth/accounts"); accs = r.accounts; }
     catch (e) {
@@ -3625,7 +3645,7 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
         ...(accounts || []).map((a) => ({ role: "admin", name: a.name, company: a.company || "", email: a.email, phone: a.phone || "", twofa: a.twofa, created: a.created })),
       ];
     }
-    setD({ classes, certs, payments, settings, accounts: accs, apps });
+    setD({ classes, certs, payments, settings, accounts: accs, apps, requests, codes });
   };
   useEffect(() => { if (user) loadAll(); }, [user]);
 
@@ -3634,6 +3654,8 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
   const savePayments = async (next) => { setD((p) => ({ ...p, payments: next })); await saveKey("gs:payments", next); };
   const saveSettings = async (next) => { setD((p) => ({ ...p, settings: next })); await saveKey("gs:settings", next); };
   const saveApps = async (next) => { setD((p) => ({ ...p, apps: next })); await saveKey("gs:apps", next); };
+  const saveRequests = async (next) => { setD((p) => ({ ...p, requests: next })); await saveKey("gs:requests", next); };
+  const saveCodes = async (next) => { setD((p) => ({ ...p, codes: next })); await saveKey("gs:codes", next); };
 
   if (!user) {
     return <AuthGate accounts={accounts} updateAccounts={updateAccounts} onSignedIn={setUser}
@@ -3647,6 +3669,9 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
     ["videos", `Product videos (${media.videos.length})`],
     ["tvideos", `Training videos (${(media.trainingVideos || []).length})`],
     ["apps", `Applications${(d.apps || []).filter((a) => !a.read).length ? ` (${(d.apps || []).filter((a) => !a.read).length} new)` : ""}`],
+    ["classes", `Classes (${d.classes.length})`],
+    ["requests", `Class requests${(d.requests || []).filter((r) => !r.read).length ? ` (${(d.requests || []).filter((r) => !r.read).length} new)` : ""}`],
+    ["codes", "Discount codes"],
     ["users", `Users (${d.certs.length})`],
     ["admins", `Admins (${d.accounts.filter((a) => a.role === "admin").length})`],
     ["report", "Class report"],
@@ -3679,6 +3704,9 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
         {tab === "videos" && <AdminVideos media={media} updateMedia={updateMedia} />}
         {tab === "tvideos" && <AdminVideos media={media} updateMedia={updateMedia} listKey="trainingVideos" pageLabel="The Training" allowHome={false} />}
         {tab === "apps" && <PortalApps apps={d.apps || []} updateApps={saveApps} />}
+        {tab === "classes" && <PortalClasses classes={d.classes} updateClasses={saveClasses} certs={d.certs} updateCerts={saveCerts} isAdmin />}
+        {tab === "requests" && <PortalRequests requests={d.requests || []} updateRequests={saveRequests} />}
+        {tab === "codes" && <PortalCodes codes={d.codes || []} updateCodes={saveCodes} instructorName={user.name} />}
         {tab === "users" && <AdminUsers certs={d.certs} saveCerts={saveCerts} accounts={d.accounts} refresh={loadAll} />}
         {tab === "admins" && <AdminAdmins accounts={d.accounts} refresh={loadAll} currentEmail={user.email} />}
         {tab === "report" && <AdminClassReport classes={d.classes} accounts={d.accounts} />}
