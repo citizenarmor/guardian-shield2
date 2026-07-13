@@ -119,6 +119,8 @@ function compressImageFile(file, maxDim = 900, quality = 0.72) {
 }
 
 const phoneOk = (p) => String(p || "").replace(/\D/g, "").length >= 10;
+const SUPERUSER_EMAIL = "aaron@citizenarmor.com";
+const isSuperUser = (u) => !!u && (u.email || "").toLowerCase() === SUPERUSER_EMAIL;
 
 const readPdfFile = (file, cb, onErr) => {
   if (!file) return;
@@ -3789,7 +3791,6 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
         <SectionTitle eyebrow={`Admin portal${user.company ? " · " + user.company : ""}`}>Welcome back, {firstName}</SectionTitle>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button onClick={loadAll} style={{ background: "none", border: `1px solid ${C.bronzeDark}`, padding: "6px 14px", cursor: "pointer", fontSize: 13, color: C.bronze }}>↻ Refresh</button>
-          <button onClick={() => go("product")} style={{ background: "none", border: `1px solid ${C.bronzeDark}`, padding: "6px 14px", cursor: "pointer", fontSize: 13, color: C.bronze }}>View The Product page</button>
           <button onClick={async () => { try { await apiPost("auth/logout", {}); } catch (e) {} setAuthToken(null); setUser(null); }} style={{ background: "none", border: `1px solid ${C.line}`, padding: "6px 14px", cursor: "pointer", fontSize: 13, color: C.muted }}>Sign out</button>
         </div>
       </div>
@@ -3815,7 +3816,7 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
         {tab === "users" && <AdminUsers certs={d.certs} saveCerts={saveCerts} accounts={d.accounts} refresh={loadAll} />}
         {tab === "admins" && <AdminAdmins accounts={d.accounts} refresh={loadAll} currentEmail={user.email} />}
         {tab === "report" && <AdminClassReport classes={d.classes} accounts={d.accounts} />}
-        {tab === "commissions" && <AdminCommissions classes={d.classes} accounts={d.accounts} payments={d.payments} savePayments={savePayments} saveClasses={saveClasses} settings={d.settings} saveSettings={saveSettings} adminName={user.name} refresh={loadAll} />}
+        {tab === "commissions" && <AdminCommissions classes={d.classes} accounts={d.accounts} payments={d.payments} savePayments={savePayments} saveClasses={saveClasses} settings={d.settings} saveSettings={saveSettings} adminName={user.name} refresh={loadAll} currentUser={user} />}
       </div>
     </div>
   );
@@ -4350,6 +4351,7 @@ function UserList({ title, all, saveCerts, accounts, type }) {
 
 /* ---------- Admins tab: manage administrator accounts ---------- */
 function AdminAdmins({ accounts, refresh, currentEmail }) {
+  const superuser = (currentEmail || "").toLowerCase() === SUPERUSER_EMAIL;
   const admins = accounts.filter((a) => a.role === "admin");
   const [sort, setSort] = useState({ key: "name", dir: "asc" });
   const [inv, setInv] = useState({ name: "", email: "" });
@@ -4410,6 +4412,7 @@ function AdminAdmins({ accounts, refresh, currentEmail }) {
 
   return (
     <div>
+      {superuser && (
       <div style={{ background: C.panel, border: `1px solid ${C.line}`, padding: "18px 20px", marginBottom: 24, display: "grid", gap: 10, maxWidth: 560 }}>
         <div style={{ ...display, fontWeight: 700, fontSize: 18, textTransform: "uppercase", color: C.bronzeLight }}>Invite an administrator</div>
         <p style={{ color: C.muted, fontSize: 13, lineHeight: 1.6, margin: 0 }}>
@@ -4422,6 +4425,7 @@ function AdminAdmins({ accounts, refresh, currentEmail }) {
         {invMsg && <div style={{ ...mono, fontSize: 12, color: invMsg.ok ? C.ok : C.warn, lineHeight: 1.6, wordBreak: "break-all" }}>{invMsg.text}</div>}
         <Btn small onClick={sendInvite} disabled={invBusy || !/@/.test(inv.email)}>{invBusy ? "Sending…" : "Send invitation"}</Btn>
       </div>
+      )}
 
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
         <div style={{ ...display, fontWeight: 700, fontSize: 22, textTransform: "uppercase", color: C.bronzeLight }}>Administrator accounts</div>
@@ -4459,7 +4463,7 @@ function AdminAdmins({ accounts, refresh, currentEmail }) {
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                         <button onClick={() => startEdit(a)} style={smallBtn}>Edit</button>
                         <button onClick={() => resetPassword(a)} style={smallBtn}>Reset password</button>
-                        {a.email !== currentEmail && (confirmDel === a.email ? (
+                        {superuser && a.email !== currentEmail && (confirmDel === a.email ? (
                           <>
                             <button onClick={() => remove(a)} style={{ ...smallBtn, background: C.warn, color: "#14120D", border: `1px solid ${C.warn}` }}>Confirm remove</button>
                             <button onClick={() => setConfirmDel(null)} style={{ ...smallBtn, color: C.muted, border: `1px solid ${C.line}` }}>Keep</button>
@@ -4698,7 +4702,7 @@ function PaymentStatementModal({ payment, onClose }) {
   );
 }
 
-function AdminCommissions({ classes, accounts, payments, savePayments, saveClasses, settings, saveSettings, adminName, refresh }) {
+function AdminCommissions({ classes, accounts, payments, savePayments, saveClasses, settings, saveSettings, adminName, refresh, currentUser = null }) {
   const instrRateDefault = Number(settings.commissionRate ?? 20);
   const companyRateDefault = Number(settings.companyRate ?? 10);
   const [rateInput, setRateInput] = useState(String(instrRateDefault));
@@ -4814,19 +4818,19 @@ function AdminCommissions({ classes, accounts, payments, savePayments, saveClass
   const enrollCount = classes.reduce((n, c) => n + (c.enrolled || []).length, 0);
   const wipeAll = async () => {
     setWipeBusy(true);
-    const paymentCount = payments.length;
-    const cls = await loadKey("gs:classes", []);
-    await saveClasses(cls.map((c) => ({ ...c, enrolled: [] })));
-    await savePayments([]);
-    await saveKey("gs:certs", []);
-    await saveKey("gs:apps", []);
-    await saveKey("gs:requests", []);
-    await saveKey("gs:notices", []);
-    setWipeText("");
-    setWipeDone(`Launch reset complete. Cleared ${enrollCount} enrollment${enrollCount === 1 ? "" : "s"}, ${paymentCount} commission payment${paymentCount === 1 ? "" : "s"}, ${extra.certs} certificate${extra.certs === 1 ? "" : "s"}, ${extra.apps} instructor application${extra.apps === 1 ? "" : "s"}, ${extra.requests} class request${extra.requests === 1 ? "" : "s"}, and ${extra.notices} notice${extra.notices === 1 ? "" : "s"}. Classes, accounts, agreements, media, discount codes, and settings were kept. The system is at zero — ready for launch.`);
-    setExtra({ certs: 0, apps: 0, requests: 0, notices: 0 });
+    try {
+      const r = await apiPost("auth/launch-reset", {});
+      const c = r.cleared;
+      setWipeText("");
+      setWipeDone(`Launch reset complete. Cleared ${c.enrollments} enrollment${c.enrollments === 1 ? "" : "s"}, ${c.payments} commission payment${c.payments === 1 ? "" : "s"}, ${c.certs} certificate${c.certs === 1 ? "" : "s"}, ${c.apps} instructor application${c.apps === 1 ? "" : "s"}, ${c.requests} class request${c.requests === 1 ? "" : "s"}, and ${c.notices} notice${c.notices === 1 ? "" : "s"}. Classes, accounts, agreements, media, discount codes, and settings were kept. The system is at zero — ready for launch.`);
+      setExtra({ certs: 0, apps: 0, requests: 0, notices: 0 });
+      if (refresh) refresh();
+    } catch (e) {
+      setWipeDone(null);
+      setExtra((x) => x);
+      alert(e.local ? "The launch reset requires the live site." : e.message);
+    }
     setWipeBusy(false);
-    if (refresh) refresh();
   };
 
   /* ---- per-student rate overrides ---- */
@@ -5095,6 +5099,7 @@ function AdminCommissions({ classes, accounts, payments, savePayments, saveClass
         )}
       </div>
 
+      {isSuperUser(currentUser) && (
       <div style={{ marginTop: 40, border: `1px solid ${C.warn}`, background: "#231710", padding: "18px 20px", maxWidth: 680 }}>
         <div style={{ ...display, fontWeight: 700, fontSize: 16, textTransform: "uppercase", color: C.warn }}>Launch reset — clear all test data</div>
         <p style={{ color: C.muted, fontSize: 13, lineHeight: 1.7, margin: "8px 0 4px" }}>
@@ -5122,6 +5127,7 @@ function AdminCommissions({ classes, accounts, payments, savePayments, saveClass
           </button>
         </div>
       </div>
+      )}
     </div>
   );
 }

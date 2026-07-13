@@ -14,6 +14,8 @@ import { runReminders } from "./reminders.mjs";
 const INSTRUCTOR_KEY = (process.env.INSTRUCTOR_ENROLL_KEY || "SHIELD").toUpperCase();
 const ADMIN_KEY = (process.env.ADMIN_ENROLL_KEY || "ADMIN").toUpperCase();
 const DEMO_MODE = process.env.DEMO_MODE !== "false";
+const SUPERUSER = (process.env.SUPERUSER_EMAIL || "aaron@citizenarmor.com").toLowerCase();
+const isSuper = (sess) => !!sess && sess.role === "admin" && (sess.email || "").toLowerCase() === SUPERUSER;
 const STRIPE_SECRET = process.env.STRIPE_SECRET_KEY || "";
 const RESEND_KEY = process.env.RESEND_API_KEY || "";
 const EMAIL_FROM = process.env.EMAIL_FROM || "Guardian Shield Training <noreply@guardianshield.training>";
@@ -506,12 +508,33 @@ async function handleAuth(req, path, body) {
     return json({ ok: true, totpSecret: account.totpSecret, email: account.email });
   }
 
+  /* ---- superuser: launch reset — clear all test data atomically ---- */
+  if (path === "launch-reset") {
+    const sess = await getSession(req);
+    if (!isSuper(sess)) return bad("Only the site owner can run the launch reset.", 403);
+    const classes = await readJson("gs:classes", []);
+    const payments = await readJson("gs:payments", []);
+    const certs = await readJson("gs:certs", []);
+    const apps = await readJson("gs:apps", []);
+    const requests = await readJson("gs:requests", []);
+    const notices = await readJson("gs:notices", []);
+    const enrollments = classes.reduce((n, c) => n + (c.enrolled || []).length, 0);
+    await writeJson("gs:classes", classes.map((c) => ({ ...c, enrolled: [] })));
+    await writeJson("gs:payments", []);
+    await writeJson("gs:certs", []);
+    await writeJson("gs:apps", []);
+    await writeJson("gs:requests", []);
+    await writeJson("gs:notices", []);
+    return json({ ok: true, cleared: { enrollments, payments: payments.length, certs: certs.length, apps: apps.length, requests: requests.length, notices: notices.length } });
+  }
+
   /* ---- admin: invite another administrator ---- */
   if (path === "send-admin-invite") {
     const sess = await getSession(req);
     if (!sess || sess.role !== "admin") return bad("Admin access required.", 403);
     const { name, email } = body;
     const inviteRole = body.role === "instructor" ? "instructor" : "admin";
+    if (inviteRole === "admin" && !isSuper(sess)) return bad("Only the site owner can add administrators.", 403);
     if (!/@/.test(email || "")) return bad("Enter a valid email address.");
     const accounts = await getAccounts();
     if (findAccount(accounts, email)) return bad("An account with that email already exists.");
@@ -572,6 +595,7 @@ async function handleAuth(req, path, body) {
     const accounts = await getAccounts();
     const account = findAccount(accounts, email);
     if (!account) return bad("No account found with that email.", 404);
+    if (account.role === "admin" && !isSuper(sess)) return bad("Only the site owner can remove administrators.", 403);
     await saveAccounts(accounts.filter((a) => a !== account));
     return json({ ok: true });
   }
