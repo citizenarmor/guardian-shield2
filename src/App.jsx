@@ -2243,8 +2243,8 @@ function Portal({ user, setUser, reloadData, accounts, updateAccounts, classes, 
         ))}
       </div>
       <div style={{ marginTop: 24 }}>
-        {tab === "classes" && <PortalClasses classes={classes} updateClasses={updateClasses} certs={certs} updateCerts={updateCerts} ownFilter={ownsClass} />}
-        {tab === "create" && <PortalCreate classes={classes} updateClasses={updateClasses} onCreated={() => setTab("classes")} instructorName={instrName} instructorCompany={user.company || ""} creatorEmail={user.email || ""} />}
+        {tab === "classes" && <PortalClasses classes={classes} updateClasses={updateClasses} certs={certs} updateCerts={updateCerts} ownFilter={ownsClass} instructorOptions={accounts.filter((a) => a.role === "instructor").map((a) => a.name)} />}
+        {tab === "create" && <PortalCreate classes={classes} updateClasses={updateClasses} onCreated={() => setTab("classes")} instructorName={instrName} instructorCompany={user.company || ""} creatorEmail={user.email || ""} instructorOptions={accounts.filter((a) => a.role === "instructor").map((a) => a.name)} />}
         {tab === "notify" && <PortalNotices notices={notices} updateNotices={updateNotices} ownClassIds={ownClassIds} />}
         {tab === "grads" && <PortalGrads certs={certs} updateCerts={updateCerts} ownClassIds={ownClassIds} />}
         {tab === "agreement" && <PortalAgreement user={user} />}
@@ -2253,7 +2253,7 @@ function Portal({ user, setUser, reloadData, accounts, updateAccounts, classes, 
   );
 }
 
-function PortalClasses({ classes, updateClasses, certs, updateCerts, isAdmin = false, ownFilter = null }) {
+function PortalClasses({ classes, updateClasses, certs, updateCerts, isAdmin = false, ownFilter = null, instructorOptions = [] }) {
   const visible = ownFilter ? classes.filter(ownFilter) : classes;
   const [filters, setFilters] = useState({ location: "all", instructor: "all", city: "all", state: "all", company: "all", sortBy: "date" });
   const sorted = applyClassFilters(visible, filters);
@@ -2269,7 +2269,7 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts, isAdmin = f
 
   const startEdit = (c) => {
     setEditingId(c.id);
-    setEf({ date: c.date, time: c.time, location: c.location, city: c.city || "", state: c.state || "", company: c.company || "", seats: c.seats, price: c.price, type: c.type, instructor: c.instructor });
+    setEf({ date: c.date, time: c.time, location: c.location, city: c.city || "", state: c.state || "", company: c.company || "", seats: c.seats, price: c.price, type: c.type, instructor: c.instructor, assistants: c.assistants || [] });
     setEditErr(null);
     setConfirmCancelId(null);
   };
@@ -2286,7 +2286,7 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts, isAdmin = f
     if (price < 0 || Number.isNaN(price)) return setEditErr("Enter a valid price.");
     await updateClasses(classes.map((c) =>
       c.id === editingId
-        ? { ...c, date: ef.date, time: ef.time, location: ef.location.trim(), city: (ef.city || "").trim(), state: ef.state || "", company: (ef.company || "").trim(), seats, price, type: ef.type, instructor: ef.instructor.trim() }
+        ? { ...c, date: ef.date, time: ef.time, location: ef.location.trim(), city: (ef.city || "").trim(), state: ef.state || "", company: (ef.company || "").trim(), seats, price, type: ef.type, instructor: ef.instructor.trim(), assistants: (ef.assistants || []).filter((n) => n && n !== ef.instructor.trim()) }
         : c
     ));
     cancelEdit();
@@ -2416,10 +2416,11 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts, isAdmin = f
                   <input type="number" value={ef.price} onChange={eset("price")} style={inputStyle} />
                 </div>
                 <div>
-                  <FieldLabel>Instructor</FieldLabel>
+                  <FieldLabel>Lead Instructor</FieldLabel>
                   <input value={ef.instructor} onChange={eset("instructor")} style={inputStyle} />
                 </div>
               </div>
+              <AssistantPicker assistants={ef.assistants || []} setAssistants={(a) => setEf({ ...ef, assistants: a })} options={instructorOptions} leadName={(ef.instructor || "").trim()} />
               {editErr && <div style={{ ...mono, fontSize: 12, color: C.warn }}>{editErr}</div>}
               <div style={{ display: "flex", gap: 8 }}>
                 <Btn small onClick={saveEdit}>Save changes</Btn>
@@ -2501,6 +2502,9 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts, isAdmin = f
               {!c.completed && !c.cancelled && enrolledN(c) > 0 && (
                 <Btn small onClick={() => graduate(c)}>Mark class complete & issue certifications</Btn>
               )}
+              {(c.assistants || []).length > 0 && (
+                <span style={{ ...mono, fontSize: 11, color: C.muted, width: "100%" }}>Assisting: {(c.assistants || []).join(", ")}</span>
+              )}
               {c.rosterScan ? (
                 <>
                   <button onClick={() => viewRosterScan(c)} style={btnStyle}>📄 View signed roster</button>
@@ -2534,13 +2538,41 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts, isAdmin = f
   );
 }
 
-function PortalCreate({ classes, updateClasses, onCreated, instructorName, instructorCompany, creatorEmail = "" }) {
+function AssistantPicker({ assistants, setAssistants, options, leadName }) {
+  const [pick, setPick] = useState("");
+  const avail = (options || []).filter((n) => n && n !== leadName && !assistants.includes(n));
+  return (
+    <div>
+      <FieldLabel>Assistant Instructors (optional)</FieldLabel>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        {assistants.map((n) => (
+          <span key={n} style={{ ...mono, fontSize: 12, background: "#2E2718", border: `1px solid ${C.bronzeDark}`, color: C.bronzeLight, padding: "4px 8px", borderRadius: 2, display: "inline-flex", gap: 7, alignItems: "center" }}>
+            {n}
+            <button onClick={() => setAssistants(assistants.filter((x) => x !== n))} title="Remove" style={{ background: "none", border: "none", color: C.warn, cursor: "pointer", fontSize: 12, padding: 0, lineHeight: 1 }}>✕</button>
+          </span>
+        ))}
+        <select value={pick} onChange={(e) => setPick(e.target.value)} style={{ padding: "7px 10px", border: `1px solid ${C.line}`, fontSize: 13, ...body, background: C.panel2, color: C.text }}>
+          <option value="">Add a certified instructor…</option>
+          {avail.map((n) => <option key={n} value={n}>{n}</option>)}
+        </select>
+        <button onClick={() => { if (pick) { setAssistants([...assistants, pick]); setPick(""); } }} disabled={!pick}
+          style={{ ...mono, fontSize: 12, background: "none", border: `1px solid ${C.bronzeDark}`, color: pick ? C.bronze : C.muted, padding: "6px 12px", cursor: pick ? "pointer" : "not-allowed", borderRadius: 2 }}>
+          + Add
+        </button>
+      </div>
+      <div style={{ ...mono, fontSize: 11, color: C.muted, marginTop: 5 }}>Assistants earn their own per-student commission alongside the Lead Instructor.</div>
+    </div>
+  );
+}
+
+function PortalCreate({ classes, updateClasses, onCreated, instructorName, instructorCompany, creatorEmail = "", instructorOptions = [] }) {
+  const [assistants, setAssistants] = useState([]);
   const [f, setF] = useState({ date: "", time: "8:00 AM", location: "", city: "", state: "", seats: 12, price: 495, type: "standard", instructor: instructorName || "", company: instructorCompany || "" });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const valid = f.date && f.location.trim() && f.city.trim() && f.state && f.instructor.trim() && Number(f.seats) > 0;
 
   const create = async () => {
-    const cls = { id: "GS-" + uid(), ...f, location: f.location.trim(), city: f.city.trim(), company: (f.company || "").trim(), seats: Number(f.seats), price: Number(f.price), enrolled: [], completed: false, createdBy: creatorEmail || undefined };
+    const cls = { id: "GS-" + uid(), ...f, location: f.location.trim(), city: f.city.trim(), company: (f.company || "").trim(), seats: Number(f.seats), price: Number(f.price), enrolled: [], completed: false, createdBy: creatorEmail || undefined, assistants: assistants.filter((n) => n && n !== f.instructor.trim()) };
     await updateClasses([...classes, cls]);
     onCreated();
   };
@@ -2575,8 +2607,9 @@ function PortalCreate({ classes, updateClasses, onCreated, instructorName, instr
       <div className="gs-row-3">
         <Field label="Seats" type="number" value={f.seats} onChange={set("seats")} />
         <Field label="Price ($)" type="number" value={f.price} onChange={set("price")} />
-        <Field label="Instructor" value={f.instructor} onChange={set("instructor")} placeholder="Your name" />
+        <Field label="Lead Instructor" value={f.instructor} onChange={set("instructor")} placeholder="Your name" />
       </div>
+      <AssistantPicker assistants={assistants} setAssistants={setAssistants} options={instructorOptions} leadName={f.instructor.trim()} />
       <Btn disabled={!valid} onClick={create}>Publish class to the schedule</Btn>
       <div style={{ ...mono, fontSize: 12, color: C.muted }}>You'll receive a notification in this portal each time a student registers.</div>
     </div>
@@ -3810,7 +3843,7 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
         {tab === "videos" && <AdminVideos media={media} updateMedia={updateMedia} />}
         {tab === "tvideos" && <AdminVideos media={media} updateMedia={updateMedia} listKey="trainingVideos" pageLabel="The Training" allowHome={false} />}
         {tab === "apps" && <PortalApps apps={d.apps || []} updateApps={saveApps} />}
-        {tab === "classes" && <PortalClasses classes={d.classes} updateClasses={saveClasses} certs={d.certs} updateCerts={saveCerts} isAdmin />}
+        {tab === "classes" && <PortalClasses classes={d.classes} updateClasses={saveClasses} certs={d.certs} updateCerts={saveCerts} isAdmin instructorOptions={(d.accounts || []).filter((a) => a.role === "instructor").map((a) => a.name)} />}
         {tab === "requests" && <PortalRequests requests={d.requests || []} updateRequests={saveRequests} />}
         {tab === "codes" && <PortalCodes codes={d.codes || []} updateCodes={saveCodes} instructorName={user.name} />}
         {tab === "users" && <AdminUsers certs={d.certs} saveCerts={saveCerts} accounts={d.accounts} refresh={loadAll} />}
@@ -4719,8 +4752,10 @@ function AdminCommissions({ classes, accounts, certs = [], payments, savePayment
   const JM4 = "JM4 Tactical, LLC";
   const instrRateDefault = Number(settings.commissionRate ?? 20);
   const companyRateDefault = Number(settings.companyRate ?? 10);
+  const assistantRateDefault = Number(settings.assistantRate ?? 10);
   const [rateInput, setRateInput] = useState(String(instrRateDefault));
   const [companyRateInput, setCompanyRateInput] = useState(String(companyRateDefault));
+  const [assistRateInput, setAssistRateInput] = useState(String(assistantRateDefault));
   const [printOpen, setPrintOpen] = useState(false);
   const [dailyPrintOpen, setDailyPrintOpen] = useState(false);
   const [editRate, setEditRate] = useState(null);
@@ -4740,19 +4775,31 @@ function AdminCommissions({ classes, accounts, certs = [], payments, savePayment
     return a ? a.company || "" : "";
   };
 
-  /* ---- per-student commission math ---- */
-  const iMap = {}, cMap = {}, studentRows = [];
+  /* ---- per-student commission math (Lead + Assistant instructors) ---- */
+  const iMap = {}, cMap = {}, studentRows = [], payEntries = [];
   classes.filter((c) => !c.cancelled).forEach((c) => {
     const comp = companyOf(c.instructor) || "—";
+    const assistantNames = (c.assistants || []).filter((n) => n && n !== c.instructor);
     (c.enrolled || []).forEach((s) => {
       const paid = typeof s.paid === "number" ? s.paid : c.price;
       const iRate = s.instrRate != null ? Number(s.instrRate) : instrRateDefault;
       const cRate = s.companyRate != null ? Number(s.companyRate) : companyRateDefault;
       const iCom = round2((paid * iRate) / 100);
       const cCom = round2((paid * cRate) / 100);
-      studentRows.push({ classId: c.id, date: c.date, instructor: c.instructor, company: comp, ref: s.ref, student: s.name, paid, iRate, cRate, iCom, cCom, overridden: s.instrRate != null || s.companyRate != null });
+      const aOv = s.assistantRates || {};
+      const aList = assistantNames.map((name) => {
+        const rate = aOv[name] != null ? Number(aOv[name]) : assistantRateDefault;
+        return { name, rate, com: round2((paid * rate) / 100), overridden: aOv[name] != null };
+      });
+      studentRows.push({ classId: c.id, date: c.date, instructor: c.instructor, company: comp, ref: s.ref, student: s.name, paid, iRate, cRate, iCom, cCom, assistants: aList, aOv, overridden: s.instrRate != null || s.companyRate != null || aList.some((a) => a.overridden) });
       if (!iMap[c.instructor]) iMap[c.instructor] = { payee: c.instructor, company: comp, students: 0, revenue: 0, commission: 0 };
       iMap[c.instructor].students += 1; iMap[c.instructor].revenue += paid; iMap[c.instructor].commission += iCom;
+      payEntries.push({ ref: s.ref, classId: c.id, date: c.date, student: s.name, paid, payee: c.instructor, role: "Lead", rate: iRate, commission: iCom });
+      aList.forEach((a) => {
+        if (!iMap[a.name]) iMap[a.name] = { payee: a.name, company: companyOf(a.name) || "—", students: 0, revenue: 0, commission: 0 };
+        iMap[a.name].students += 1; iMap[a.name].revenue += paid; iMap[a.name].commission += a.com;
+        payEntries.push({ ref: s.ref, classId: c.id, date: c.date, student: s.name, paid, payee: a.name, role: "Assistant", rate: a.rate, commission: a.com });
+      });
       if (comp !== "—") {
         if (!cMap[comp]) cMap[comp] = { payee: comp, students: 0, revenue: 0, commission: 0 };
         cMap[comp].students += 1; cMap[comp].revenue += paid; cMap[comp].commission += cCom;
@@ -4772,16 +4819,22 @@ function AdminCommissions({ classes, accounts, certs = [], payments, savePayment
   );
   const unpaidItems = !pb.payee ? [] : (() => {
     const done = settledRefs(pb.type, pb.payee);
-    return studentRows
-      .filter((r) => (pb.type === "company" ? r.company === pb.payee : r.instructor === pb.payee))
-      .filter((r) => !done.has(r.ref))
-      .map((r) => ({ classId: r.classId, date: r.date, ref: r.ref, student: r.student, paid: r.paid, rate: pb.type === "company" ? r.cRate : r.iRate, commission: pb.type === "company" ? r.cCom : r.iCom }));
+    if (pb.type === "company") {
+      return studentRows
+        .filter((r) => r.company === pb.payee)
+        .filter((r) => !done.has(r.ref))
+        .map((r) => ({ classId: r.classId, date: r.date, ref: r.ref, student: r.student, paid: r.paid, rate: r.cRate, commission: r.cCom }));
+    }
+    return payEntries
+      .filter((e) => e.payee === pb.payee && !done.has(e.ref))
+      .map((e) => ({ classId: e.classId, date: e.date, ref: e.ref, student: `${e.student}${e.role === "Assistant" ? " (assisting)" : ""}`, paid: e.paid, rate: e.rate, commission: e.commission }));
   })();
   const pickPayee = (type, payee) => {
     setPb((p) => ({ ...p, type, payee }));
     const done = payee ? settledRefs(type, payee) : new Set();
     const next = {};
-    studentRows.filter((r) => (type === "company" ? r.company === payee : r.instructor === payee)).forEach((r) => { if (!done.has(r.ref)) next[r.ref] = true; });
+    if (type === "company") studentRows.filter((r) => r.company === payee).forEach((r) => { if (!done.has(r.ref)) next[r.ref] = true; });
+    else payEntries.filter((e) => e.payee === payee).forEach((e) => { if (!done.has(e.ref)) next[e.ref] = true; });
     setSel(next);
     setPbErr(null);
   };
@@ -4902,6 +4955,8 @@ function AdminCommissions({ classes, accounts, certs = [], payments, savePayment
   const saveStudentRates = async () => {
     const iVal = editRate.i === "" ? null : Math.max(0, Math.min(100, Number(editRate.i)));
     const cVal = editRate.c === "" ? null : Math.max(0, Math.min(100, Number(editRate.c)));
+    const aVals = {};
+    Object.entries(editRate.a || {}).forEach(([name, v]) => { if (v !== "") aVals[name] = Math.max(0, Math.min(100, Number(v) || 0)); });
     await saveClasses(classes.map((c) => c.id !== editRate.classId ? c : ({
       ...c,
       enrolled: (c.enrolled || []).map((s) => {
@@ -4909,6 +4964,7 @@ function AdminCommissions({ classes, accounts, certs = [], payments, savePayment
         const upd = { ...s };
         if (iVal == null) delete upd.instrRate; else upd.instrRate = iVal;
         if (cVal == null) delete upd.companyRate; else upd.companyRate = cVal;
+        if (Object.keys(aVals).length === 0) delete upd.assistantRates; else upd.assistantRates = aVals;
         return upd;
       }),
     })));
@@ -5006,7 +5062,11 @@ function AdminCommissions({ classes, accounts, certs = [], payments, savePayment
           <FieldLabel>Company rate (default % per student)</FieldLabel>
           <input type="number" value={companyRateInput} onChange={(e) => setCompanyRateInput(e.target.value)} style={{ ...selStyle, width: 110 }} />
         </div>
-        <Btn small onClick={() => saveSettings({ ...settings, commissionRate: Math.max(0, Math.min(100, Number(rateInput) || 0)), companyRate: Math.max(0, Math.min(100, Number(companyRateInput) || 0)) })}>Save rates</Btn>
+        <div>
+          <FieldLabel>Assistant rate (default % per student)</FieldLabel>
+          <input type="number" value={assistRateInput} onChange={(e) => setAssistRateInput(e.target.value)} style={{ ...selStyle, width: 110 }} />
+        </div>
+        <Btn small onClick={() => saveSettings({ ...settings, commissionRate: Math.max(0, Math.min(100, Number(rateInput) || 0)), companyRate: Math.max(0, Math.min(100, Number(companyRateInput) || 0)), assistantRate: Math.max(0, Math.min(100, Number(assistRateInput) || 0)) })}>Save rates</Btn>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
           <Btn small ghost onClick={() => exportRowsCSV(earningsRows(), "commission-report.csv")}>Export .csv</Btn>
           <Btn small ghost onClick={() => exportSheetsXLSX([{ name: "Instructor Earnings", rows: earningsRows().filter((r) => r.Type === "Instructor") }, { name: "Company Earnings", rows: earningsRows().filter((r) => r.Type === "Company") }, { name: "Per-Student Rates", rows: rateRows() }, { name: "Payments", rows: paymentRows() }], "commission-report.xlsx")}>Export .xlsx</Btn>
@@ -5144,7 +5204,7 @@ function AdminCommissions({ classes, accounts, certs = [], payments, savePayment
           <div className="gs-table-wrap">
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, background: C.panel, border: `1px solid ${C.line}`, minWidth: 900 }}>
               <thead><tr style={{ background: C.panel2 }}>
-                {["CLASS", "DATE", "STUDENT", "INSTRUCTOR", "COMPANY", "PAID", "INSTR %", "INSTR $", "CO %", "CO $", ""].map((h, i) => <th key={i} style={th}>{h}</th>)}
+                {["CLASS", "DATE", "STUDENT", "LEAD INSTRUCTOR", "COMPANY", "PAID", "LEAD %", "LEAD $", "CO %", "CO $", "ASSISTANTS", ""].map((h, i) => <th key={i} style={th}>{h}</th>)}
               </tr></thead>
               <tbody>
                 {studentRows.map((r) => (
@@ -5160,16 +5220,24 @@ function AdminCommissions({ classes, accounts, certs = [], payments, savePayment
                       <td style={tdm}>{money(r.iCom)}</td>
                       <td style={{ ...tdm, color: r.overridden ? C.bronzeLight : C.muted }}>{r.cRate}%</td>
                       <td style={tdm}>{money(r.cCom)}</td>
+                      <td style={{ ...tdm, fontSize: 11 }}>
+                        {r.assistants.length === 0 ? <span style={{ color: C.muted }}>—</span> : r.assistants.map((a) => (
+                          <div key={a.name} style={{ color: a.overridden ? C.bronzeLight : C.muted, whiteSpace: "nowrap" }}>{a.name} · {a.rate}% ({money(a.com)})</div>
+                        ))}
+                      </td>
                       <td style={td}>
-                        <button onClick={() => setEditRate({ classId: r.classId, ref: r.ref, student: r.student, i: r.overridden && r.iRate !== instrRateDefault ? String(r.iRate) : "", c: r.overridden && r.cRate !== companyRateDefault ? String(r.cRate) : "" })} style={smallBtn}>Set rates</button>
+                        <button onClick={() => setEditRate({ classId: r.classId, ref: r.ref, student: r.student, i: r.iRate !== instrRateDefault || (r.overridden && r.aOv.instrRate != null) ? (r.iRate !== instrRateDefault ? String(r.iRate) : "") : "", c: r.cRate !== companyRateDefault ? String(r.cRate) : "", a: Object.fromEntries(r.assistants.map((x) => [x.name, x.overridden ? String(x.rate) : ""])) })} style={smallBtn}>Set rates</button>
                       </td>
                     </tr>
                     {editRate && editRate.ref === r.ref && (
-                      <tr><td colSpan={11} style={{ ...td, background: C.panel2 }}>
+                      <tr><td colSpan={12} style={{ ...td, background: C.panel2 }}>
                         <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
                           <span style={{ ...mono, fontSize: 12, color: C.muted }}>Custom rates for {editRate.student}:</span>
-                          <div><FieldLabel>Instructor % (blank = {instrRateDefault})</FieldLabel><input type="number" value={editRate.i} onChange={(e) => setEditRate({ ...editRate, i: e.target.value })} style={{ ...selStyle, width: 110 }} /></div>
+                          <div><FieldLabel>Lead % (blank = {instrRateDefault})</FieldLabel><input type="number" value={editRate.i} onChange={(e) => setEditRate({ ...editRate, i: e.target.value })} style={{ ...selStyle, width: 110 }} /></div>
                           <div><FieldLabel>Company % (blank = {companyRateDefault})</FieldLabel><input type="number" value={editRate.c} onChange={(e) => setEditRate({ ...editRate, c: e.target.value })} style={{ ...selStyle, width: 110 }} /></div>
+                          {Object.keys(editRate.a || {}).map((name) => (
+                            <div key={name}><FieldLabel>{name} % (blank = {assistantRateDefault})</FieldLabel><input type="number" value={editRate.a[name]} onChange={(e) => setEditRate({ ...editRate, a: { ...editRate.a, [name]: e.target.value } })} style={{ ...selStyle, width: 130 }} /></div>
+                          ))}
                           <Btn small onClick={saveStudentRates}>Save</Btn>
                           <Btn small ghost onClick={() => setEditRate(null)}>Cancel</Btn>
                         </div>
