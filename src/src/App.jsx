@@ -3816,7 +3816,7 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
         {tab === "users" && <AdminUsers certs={d.certs} saveCerts={saveCerts} accounts={d.accounts} refresh={loadAll} />}
         {tab === "admins" && <AdminAdmins accounts={d.accounts} refresh={loadAll} currentEmail={user.email} />}
         {tab === "report" && <AdminClassReport classes={d.classes} accounts={d.accounts} />}
-        {tab === "commissions" && <AdminCommissions classes={d.classes} accounts={d.accounts} payments={d.payments} savePayments={savePayments} saveClasses={saveClasses} settings={d.settings} saveSettings={saveSettings} adminName={user.name} refresh={loadAll} currentUser={user} />}
+        {tab === "commissions" && <AdminCommissions classes={d.classes} accounts={d.accounts} certs={d.certs} payments={d.payments} savePayments={savePayments} saveClasses={saveClasses} settings={d.settings} saveSettings={saveSettings} adminName={user.name} refresh={loadAll} currentUser={user} />}
       </div>
     </div>
   );
@@ -4640,7 +4640,11 @@ function AdminClassReport({ classes, accounts }) {
 function PaymentStatementModal({ payment, onClose }) {
   const ink = "#2B2415", bronze = "#8F6F2E";
   const items = payment.items || [];
-  const exportRows = () => items.map((i) => ({
+  const isJm4 = payment.payeeType === "jm4";
+  const exportRows = () => items.map((i) => (isJm4 ? {
+    "Payment Date": payment.date, "Check / EFT": payment.checkRef || "", "Payee": payment.payee, "Payee Type": "Content licensor",
+    "Graduated": i.date, "Cert ID": i.certId || i.ref, "Graduate": i.student, "Type": i.gradType || "", "Certification Fee": Number(i.fee ?? i.commission).toFixed(2),
+  } : {
     "Payment Date": payment.date, "Check / EFT": payment.checkRef || "", "Payee": payment.payee,
     "Payee Type": (payment.payeeType || "instructor") === "company" ? "Company" : "Instructor",
     "Class": i.classId, "Class Date": i.date, "Student": i.student, "Ref": i.ref,
@@ -4659,12 +4663,12 @@ function PaymentStatementModal({ payment, onClose }) {
           <div style={{ display: "flex", alignItems: "center", gap: 16, borderBottom: `3px solid ${bronze}`, paddingBottom: 12 }}>
             <img src={LOGO} alt="Guardian seal" style={{ width: 54, height: 54, borderRadius: "50%" }} />
             <div>
-              <div style={{ ...display, fontWeight: 800, fontSize: 24, textTransform: "uppercase", letterSpacing: "0.04em" }}>Commission Payment Statement</div>
+              <div style={{ ...display, fontWeight: 800, fontSize: 24, textTransform: "uppercase", letterSpacing: "0.04em" }}>{isJm4 ? "Certification Fee Payment Statement" : "Commission Payment Statement"}</div>
               <div style={{ ...mono, fontSize: 11, letterSpacing: "0.16em", color: bronze }}>GUARDIAN SHIELD TRAINING</div>
             </div>
           </div>
           <div style={{ display: "flex", gap: 30, flexWrap: "wrap", marginTop: 16, fontSize: 13 }}>
-            <div><div style={{ ...mono, fontSize: 9, letterSpacing: "0.14em", color: bronze }}>PAID TO</div><div style={{ fontWeight: 700, fontSize: 16 }}>{payment.payee}</div><div style={{ fontSize: 11, color: "#6B6046" }}>{(payment.payeeType || "instructor") === "company" ? "Company" : "Instructor"}{payment.company && (payment.payeeType || "instructor") !== "company" ? ` · ${payment.company}` : ""}</div></div>
+            <div><div style={{ ...mono, fontSize: 9, letterSpacing: "0.14em", color: bronze }}>PAID TO</div><div style={{ fontWeight: 700, fontSize: 16 }}>{payment.payee}</div><div style={{ fontSize: 11, color: "#6B6046" }}>{isJm4 ? "Training content licensor" : (payment.payeeType || "instructor") === "company" ? "Company" : "Instructor"}{!isJm4 && payment.company && (payment.payeeType || "instructor") !== "company" ? ` · ${payment.company}` : ""}</div></div>
             <div><div style={{ ...mono, fontSize: 9, letterSpacing: "0.14em", color: bronze }}>PAYMENT DATE</div><div style={{ fontWeight: 700 }}>{fmtDate(payment.date)}</div></div>
             <div><div style={{ ...mono, fontSize: 9, letterSpacing: "0.14em", color: bronze }}>CHECK # / EFT RECORD</div><div style={{ ...mono, fontWeight: 700 }}>{payment.checkRef || "—"}</div></div>
             <div><div style={{ ...mono, fontSize: 9, letterSpacing: "0.14em", color: bronze }}>RECORDED BY</div><div>{payment.recordedBy || "—"}</div></div>
@@ -4673,12 +4677,20 @@ function PaymentStatementModal({ payment, onClose }) {
           {payment.note && <div style={{ ...serif, fontSize: 12, marginTop: 10, color: "#3A3222" }}>Note: {payment.note}</div>}
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, marginTop: 16 }}>
             <thead><tr style={{ textAlign: "left" }}>
-              {["CLASS DATE", "CLASS", "STUDENT", "REF", "STUDENT PAID", "RATE", "COMMISSION"].map((h) => (
+              {(isJm4 ? ["GRADUATED", "CERT ID", "GRADUATE", "TYPE", "CERTIFICATION FEE"] : ["CLASS DATE", "CLASS", "STUDENT", "REF", "STUDENT PAID", "RATE", "COMMISSION"]).map((h) => (
                 <th key={h} style={{ ...mono, fontSize: 9, letterSpacing: "0.08em", color: bronze, padding: "5px 6px", borderBottom: `2px solid ${bronze}` }}>{h}</th>
               ))}
             </tr></thead>
             <tbody>
-              {items.map((i) => (
+              {items.map((i) => (isJm4 ? (
+                <tr key={i.ref}>
+                  <td style={{ padding: "5px 6px", borderBottom: "1px solid #E3DCC8" }}>{i.date}</td>
+                  <td style={{ padding: "5px 6px", borderBottom: "1px solid #E3DCC8", fontFamily: "monospace" }}>{i.certId || i.ref}</td>
+                  <td style={{ padding: "5px 6px", borderBottom: "1px solid #E3DCC8" }}>{i.student}</td>
+                  <td style={{ padding: "5px 6px", borderBottom: "1px solid #E3DCC8" }}>{i.gradType || "—"}</td>
+                  <td style={{ padding: "5px 6px", borderBottom: "1px solid #E3DCC8", fontWeight: 700 }}>{money(i.fee ?? i.commission)}</td>
+                </tr>
+              ) : (
                 <tr key={i.ref}>
                   <td style={{ padding: "5px 6px", borderBottom: "1px solid #E3DCC8" }}>{i.date}</td>
                   <td style={{ padding: "5px 6px", borderBottom: "1px solid #E3DCC8" }}>{i.classId}</td>
@@ -4688,9 +4700,9 @@ function PaymentStatementModal({ payment, onClose }) {
                   <td style={{ padding: "5px 6px", borderBottom: "1px solid #E3DCC8" }}>{i.rate}%</td>
                   <td style={{ padding: "5px 6px", borderBottom: "1px solid #E3DCC8", fontWeight: 700 }}>{money(i.commission)}</td>
                 </tr>
-              ))}
+              )))}
               <tr>
-                <td colSpan={6} style={{ padding: "8px 6px", textAlign: "right", ...mono, fontSize: 10, letterSpacing: "0.1em", color: bronze }}>TOTAL PAYMENT — {items.length} STUDENT COMMISSION{items.length === 1 ? "" : "S"}</td>
+                <td colSpan={isJm4 ? 4 : 6} style={{ padding: "8px 6px", textAlign: "right", ...mono, fontSize: 10, letterSpacing: "0.1em", color: bronze }}>TOTAL PAYMENT — {items.length} {isJm4 ? `CERTIFICATION FEE${items.length === 1 ? "" : "S"}` : `STUDENT COMMISSION${items.length === 1 ? "" : "S"}`}</td>
                 <td style={{ padding: "8px 6px", fontWeight: 800, fontSize: 14, borderTop: `2px solid ${bronze}` }}>{money(payment.amount)}</td>
               </tr>
             </tbody>
@@ -4702,7 +4714,9 @@ function PaymentStatementModal({ payment, onClose }) {
   );
 }
 
-function AdminCommissions({ classes, accounts, payments, savePayments, saveClasses, settings, saveSettings, adminName, refresh, currentUser = null }) {
+function AdminCommissions({ classes, accounts, certs = [], payments, savePayments, saveClasses, settings, saveSettings, adminName, refresh, currentUser = null }) {
+  const CERT_FEE = 50;
+  const JM4 = "JM4 Tactical, LLC";
   const instrRateDefault = Number(settings.commissionRate ?? 20);
   const companyRateDefault = Number(settings.companyRate ?? 10);
   const [rateInput, setRateInput] = useState(String(instrRateDefault));
@@ -4715,6 +4729,10 @@ function AdminCommissions({ classes, accounts, payments, savePayments, saveClass
   const [sel, setSel] = useState({});
   const [pbErr, setPbErr] = useState(null);
   const [stmtMsg, setStmtMsg] = useState(null);
+  const [jm4Sel, setJm4Sel] = useState(null);
+  const [jm4F, setJm4F] = useState({ checkRef: "", date: new Date().toISOString().slice(0, 10), email: "" });
+  const [jm4Err, setJm4Err] = useState(null);
+  const [jm4Msg, setJm4Msg] = useState(null);
 
   const round2 = (n) => Math.round(n * 100) / 100;
   const companyOf = (name) => {
@@ -4802,6 +4820,53 @@ function AdminCommissions({ classes, accounts, payments, savePayments, saveClass
   };
   const removePayment = async (id) => savePayments(payments.filter((p) => p.id !== id));
 
+  /* ---- JM4 Tactical certification fees: $50 per graduate (students & instructors) ---- */
+  const jm4SettledIds = settledRefs("jm4", JM4);
+  const jm4Rows = certs.map((c) => ({
+    ref: c.certId, certId: c.certId, date: c.issued, classId: c.classId || "—",
+    student: c.name, gradType: c.type === "instructor" ? "Instructor" : "Student", fee: CERT_FEE,
+  }));
+  const jm4Unpaid = jm4Rows.filter((r) => !jm4SettledIds.has(r.ref));
+  const jm4Accrued = round2(certs.length * CERT_FEE);
+  const jm4PaidTotal = paidFor("jm4", JM4);
+  const jm4Balance = round2(jm4Accrued - jm4PaidTotal);
+  const jm4SelMap = jm4Sel || Object.fromEntries(jm4Unpaid.map((r) => [r.ref, true]));
+  const jm4Chosen = jm4Unpaid.filter((r) => jm4SelMap[r.ref]);
+  const jm4ChosenTotal = round2(jm4Chosen.length * CERT_FEE);
+  const toggleJm4 = (ref) => setJm4Sel({ ...jm4SelMap, [ref]: !jm4SelMap[ref] });
+
+  const recordJm4Payout = async () => {
+    if (!jm4F.checkRef.trim()) return setJm4Err("Enter the check number or EFT record for this payment.");
+    if (jm4Chosen.length === 0) return setJm4Err("Select at least one certification fee to pay.");
+    const payment = {
+      id: uid(), payeeType: "jm4", payee: JM4, company: JM4,
+      amount: jm4ChosenTotal, date: jm4F.date, checkRef: jm4F.checkRef.trim(),
+      note: `Certification fee — $${CERT_FEE} per graduate (training content licensing)`,
+      recipientEmail: jm4F.email.trim() || undefined,
+      items: jm4Chosen.map((r) => ({ ref: r.ref, certId: r.certId, date: r.date, classId: r.classId, student: r.student, gradType: r.gradType, fee: CERT_FEE, paid: CERT_FEE, rate: 100, commission: CERT_FEE })),
+      recordedBy: adminName, recordedAt: new Date().toISOString(),
+    };
+    let list = [payment, ...payments];
+    await savePayments(list);
+    let shown = payment;
+    setJm4Msg(null);
+    try {
+      const r = await apiPost("send-statement", { paymentId: payment.id });
+      if (r.emailed) {
+        shown = { ...payment, statementEmailedAt: new Date().toISOString(), statementEmailedTo: r.to.join(", ") };
+        list = list.map((x) => (x.id === payment.id ? shown : x));
+        await savePayments(list);
+        setJm4Msg({ ok: true, text: `✓ Statement emailed to ${r.to.join(", ")}.` });
+      } else {
+        setJm4Msg({ ok: false, text: r.reason || "Statement email not sent — print and deliver it manually." });
+      }
+    } catch (e) {
+      setJm4Msg({ ok: false, text: e.local ? "Statement email isn't available in preview mode — use Print / Export." : `Statement email failed: ${e.message}` });
+    }
+    setStatement(shown);
+    setJm4Sel(null); setJm4F({ checkRef: "", date: new Date().toISOString().slice(0, 10), email: jm4F.email }); setJm4Err(null);
+  };
+
   /* ---- launch reset: clear all test data ---- */
   const [wipeText, setWipeText] = useState("");
   const [wipeDone, setWipeDone] = useState(null);
@@ -4863,9 +4928,9 @@ function AdminCommissions({ classes, accounts, payments, savePayments, saveClass
     ...cRows.map((r) => ({ "Type": "Company", "Payee": r.payee, "Company": "", "Students": r.students, "Revenue": r.revenue.toFixed(2), "Commission": r.commission.toFixed(2), "Payments Made": r.paid.toFixed(2), "Balance Due": r.balance.toFixed(2) })),
   ];
   const rateRows = () => studentRows.map((r) => ({ "Class": r.classId, "Date": r.date, "Instructor": r.instructor, "Company": r.company, "Student": r.student, "Ref": r.ref, "Paid": r.paid.toFixed(2), "Instructor %": r.iRate, "Company %": r.cRate, "Instructor Commission": r.iCom.toFixed(2), "Company Commission": r.cCom.toFixed(2), "Custom Rates": r.overridden ? "Yes" : "" }));
-  const paymentRows = () => payments.map((p) => ({ "Date": p.date, "Payee": p.payee, "Type": (p.payeeType || "instructor") === "company" ? "Company" : "Instructor", "Check / EFT": p.checkRef || "", "Amount": Number(p.amount).toFixed(2), "Students Covered": p.items ? p.items.length : "", "Note": p.note || "", "Recorded By": p.recordedBy || "" }));
+  const paymentRows = () => payments.map((p) => ({ "Date": p.date, "Payee": p.payee, "Type": p.payeeType === "jm4" ? "Certification fee" : (p.payeeType || "instructor") === "company" ? "Company" : "Instructor", "Check / EFT": p.checkRef || "", "Amount": Number(p.amount).toFixed(2), "Students Covered": p.items ? p.items.length : "", "Note": p.note || "", "Recorded By": p.recordedBy || "" }));
   const dailyExportRows = () => daily.flatMap((d) => [
-    ...d.rows.map((p) => ({ "Date": p.date, "Payee": p.payee, "Type": (p.payeeType || "instructor") === "company" ? "Company" : "Instructor", "Check / EFT": p.checkRef || "", "Amount": Number(p.amount).toFixed(2), "Note": p.note || "", "Recorded By": p.recordedBy || "" })),
+    ...d.rows.map((p) => ({ "Date": p.date, "Payee": p.payee, "Type": p.payeeType === "jm4" ? "Certification fee" : (p.payeeType || "instructor") === "company" ? "Company" : "Instructor", "Check / EFT": p.checkRef || "", "Amount": Number(p.amount).toFixed(2), "Note": p.note || "", "Recorded By": p.recordedBy || "" })),
     { "Date": d.date, "Payee": "— DAY TOTAL —", "Type": "", "Check / EFT": "", "Amount": d.total.toFixed(2), "Note": "", "Recorded By": "" },
   ]);
 
@@ -4951,6 +5016,65 @@ function AdminCommissions({ classes, accounts, payments, savePayments, saveClass
 
       <EarningsTable title="Instructor commissions" rows={iRows} totals={iTot} />
       <EarningsTable title="Company commissions" rows={cRows} totals={cTot} />
+
+      {/* JM4 Tactical certification fees */}
+      <div style={{ background: C.panel, border: `1px solid ${C.bronzeDark}`, padding: "18px 20px", display: "grid", gap: 14 }}>
+        <div style={{ ...display, fontWeight: 700, fontSize: 18, textTransform: "uppercase", color: C.bronzeLight }}>Certification Fees — JM4 Tactical, LLC</div>
+        <p style={{ color: C.muted, fontSize: 13, lineHeight: 1.6, margin: 0, maxWidth: 760 }}>
+          A <strong style={{ color: C.text }}>${'{'}CERT_FEE{'}'} Certification Fee</strong> is due to JM4 Tactical, LLC for every graduating student and graduating instructor, as compensation for creating this program's training content. Every graduate is added to this list automatically at certification.
+        </p>
+        <div style={{ display: "flex", gap: 22, flexWrap: "wrap", ...mono, fontSize: 13 }}>
+          <span>Graduates to date: <strong style={{ color: C.text }}>{certs.length}</strong></span>
+          <span>Fees accrued: <strong style={{ color: C.text }}>{money(jm4Accrued)}</strong></span>
+          <span>Paid to JM4: <strong style={{ color: C.ok }}>{money(jm4PaidTotal)}</strong></span>
+          <span>Balance due: <strong style={{ color: jm4Balance > 0 ? C.warn : C.ok }}>{money(jm4Balance)}</strong></span>
+        </div>
+        {jm4Msg && (
+          <div style={{ ...mono, fontSize: 12, color: jm4Msg.ok ? C.ok : C.warn, background: jm4Msg.ok ? "#1C2A21" : "#2E1F16", border: `1px solid ${jm4Msg.ok ? C.ok : C.warn}`, padding: "8px 12px" }}>{jm4Msg.text}</div>
+        )}
+        {jm4Unpaid.length === 0 ? (
+          <p style={{ color: C.ok, fontSize: 13, margin: 0, ...mono }}>✓ All certification fees are settled.</p>
+        ) : (
+          <>
+            <div style={{ overflowX: "auto", maxHeight: 300, overflowY: "auto", border: `1px solid ${C.line}` }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, color: C.text }}>
+                <thead><tr>
+                  <th style={th}></th>
+                  <th style={th}>GRADUATED</th><th style={th}>CERT ID</th><th style={th}>GRADUATE</th><th style={th}>TYPE</th><th style={th}>FEE</th>
+                </tr></thead>
+                <tbody>
+                  {jm4Unpaid.map((r) => (
+                    <tr key={r.ref}>
+                      <td style={td}><input type="checkbox" checked={!!jm4SelMap[r.ref]} onChange={() => toggleJm4(r.ref)} /></td>
+                      <td style={tdm}>{r.date}</td>
+                      <td style={tdm}>{r.certId}</td>
+                      <td style={td}>{r.student}</td>
+                      <td style={tdm}>{r.gradType}</td>
+                      <td style={tdm}>{money(r.fee)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+              <div>
+                <FieldLabel>Payment date</FieldLabel>
+                <input type="date" value={jm4F.date} onChange={(e) => setJm4F({ ...jm4F, date: e.target.value })} style={selStyle} />
+              </div>
+              <div>
+                <FieldLabel>Check # / EFT record</FieldLabel>
+                <input value={jm4F.checkRef} onChange={(e) => setJm4F({ ...jm4F, checkRef: e.target.value })} placeholder="e.g. 1042 or EFT-2231" style={selStyle} />
+              </div>
+              <div>
+                <FieldLabel>Statement email (optional)</FieldLabel>
+                <input type="email" value={jm4F.email} onChange={(e) => setJm4F({ ...jm4F, email: e.target.value })} placeholder="accounting@jm4tactical.com" style={selStyle} />
+              </div>
+              <Btn small onClick={recordJm4Payout} disabled={jm4Chosen.length === 0}>Record payment to JM4 — {money(jm4ChosenTotal)}</Btn>
+            </div>
+            {jm4Err && <div style={{ ...mono, fontSize: 12, color: C.warn }}>{jm4Err}</div>}
+          </>
+        )}
+      </div>
 
       {/* payout builder */}
       <div style={{ background: C.panel, border: `1px solid ${C.bronzeDark}`, padding: "18px 20px", display: "grid", gap: 14 }}>
@@ -5081,8 +5205,8 @@ function AdminCommissions({ classes, accounts, payments, savePayments, saveClass
                 {d.rows.map((p) => (
                   <div key={p.id} style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", padding: "8px 14px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12 }}>
                     <span style={{ color: C.text, ...body, fontSize: 14, fontWeight: 600 }}>{p.payee}</span>
-                    <span style={{ ...mono, fontSize: 10, letterSpacing: "0.1em", background: (p.payeeType || "instructor") === "company" ? "#2C3138" : "#2E2718", color: (p.payeeType || "instructor") === "company" ? C.steel : C.bronze, padding: "2px 7px", borderRadius: 2 }}>
-                      {(p.payeeType || "instructor") === "company" ? "COMPANY" : "INSTRUCTOR"}
+                    <span style={{ ...mono, fontSize: 10, letterSpacing: "0.1em", background: p.payeeType === "jm4" ? "#33281B" : (p.payeeType || "instructor") === "company" ? "#2C3138" : "#2E2718", color: p.payeeType === "jm4" ? C.bronzeLight : (p.payeeType || "instructor") === "company" ? C.steel : C.bronze, padding: "2px 7px", borderRadius: 2 }}>
+                      {p.payeeType === "jm4" ? "CERT FEE" : (p.payeeType || "instructor") === "company" ? "COMPANY" : "INSTRUCTOR"}
                     </span>
                     {p.checkRef && <span style={{ color: C.bronzeLight }}>{p.checkRef}</span>}
                     {p.statementEmailedAt && <span style={{ color: C.ok }}>✉ emailed</span>}

@@ -896,24 +896,50 @@ export default async (req) => {
       const p = payments.find((x) => x.id === body.paymentId);
       if (!p) return bad("Payment not found.", 404);
       if (!p.items || !p.items.length) return bad("This payment has no itemized statement.", 400);
+      const isJm4 = p.payeeType === "jm4";
       const accounts = await getAccounts();
       let recipients;
-      if ((p.payeeType || "instructor") === "company") {
+      if (isJm4) {
+        recipients = /@/.test(p.recipientEmail || "") ? [p.recipientEmail.trim()] : [];
+      } else if ((p.payeeType || "instructor") === "company") {
         recipients = accounts.filter((a) => a.role === "instructor" && (a.company || "").toLowerCase() === p.payee.toLowerCase()).map((a) => a.email);
       } else {
         const a = accounts.find((x) => x.role === "instructor" && x.name.toLowerCase() === p.payee.toLowerCase());
         recipients = a ? [a.email] : [];
       }
       recipients = [...new Set(recipients)];
-      if (!recipients.length) return json({ emailed: false, reason: "No portal account matches this payee — print the statement and deliver it manually." });
+      if (!recipients.length) return json({ emailed: false, reason: isJm4 ? "No statement email was provided for JM4 Tactical — print the statement and deliver it manually." : "No portal account matches this payee — print the statement and deliver it manually." });
 
       const cell = 'padding:6px 8px;border-bottom:1px solid #3A3527;';
-      const rows = p.items.map((i) => `<tr>
+      const rows = isJm4
+        ? p.items.map((i) => `<tr>
+        <td style="${cell}">${esc(i.date)}</td><td style="${cell}">${esc(i.certId || i.ref)}</td>
+        <td style="${cell}">${esc(i.student)}</td><td style="${cell}">${esc(i.gradType || "—")}</td>
+        <td style="${cell}"><strong>$${Number(i.fee ?? i.commission).toFixed(2)}</strong></td>
+      </tr>`).join("")
+        : p.items.map((i) => `<tr>
         <td style="${cell}">${esc(i.date)}</td><td style="${cell}">${esc(i.classId)}</td>
         <td style="${cell}">${esc(i.student)}</td><td style="${cell}">$${Number(i.paid).toFixed(2)}</td>
         <td style="${cell}">${esc(i.rate)}%</td><td style="${cell}"><strong>$${Number(i.commission).toFixed(2)}</strong></td>
       </tr>`).join("");
-      const html = `
+      const html = isJm4 ? `
+        <p>A Certification Fee payment has been issued to <strong>JM4 Tactical, LLC</strong> by Guardian Shield Training (The Armored Citizen, LLC), as compensation for creation of the program's training content — $50.00 per graduating student and instructor.</p>
+        <p style="background:#242017;border:1px solid #3A3527;padding:12px 16px;">
+          Paid to: <strong>${esc(p.payee)}</strong> (Training content licensor)<br>
+          Payment date: ${esc(p.date)}<br>
+          Check # / EFT record: <strong style="color:#C9A45C;">${esc(p.checkRef || "—")}</strong>${p.note ? `<br>Note: ${esc(p.note)}` : ""}
+        </p>
+        <table width="100%" style="border-collapse:collapse;font-size:13px;color:#EAE3D2;">
+          <tr>
+            ${["GRADUATED","CERT ID","GRADUATE","TYPE","CERTIFICATION FEE"].map((h) => `<th align="left" style="padding:6px 8px;border-bottom:2px solid #C9A45C;color:#C9A45C;font-size:10px;letter-spacing:1px;">${h}</th>`).join("")}
+          </tr>
+          ${rows}
+          <tr>
+            <td colspan="4" align="right" style="padding:10px 8px;color:#C9A45C;font-size:11px;letter-spacing:1px;">TOTAL PAYMENT — ${p.items.length} CERTIFICATION FEE${p.items.length === 1 ? "" : "S"}</td>
+            <td style="padding:10px 8px;font-size:17px;"><strong>$${Number(p.amount).toFixed(2)}</strong></td>
+          </tr>
+        </table>
+        <p>Please keep this statement for your records. Questions about this payment? Reply to this email.</p>` : `
         <p>A commission payment has been issued to you by Guardian Shield Training.</p>
         <p style="background:#242017;border:1px solid #3A3527;padding:12px 16px;">
           Paid to: <strong>${esc(p.payee)}</strong> (${(p.payeeType || "instructor") === "company" ? "Company" : "Instructor"})<br>
@@ -931,7 +957,7 @@ export default async (req) => {
           </tr>
         </table>
         <p>Please keep this statement for your records. Questions about this payment? Reply to this email.</p>`;
-      const result = await sendEmail(recipients, `Commission payment issued — $${Number(p.amount).toFixed(2)}`, html);
+      const result = await sendEmail(recipients, isJm4 ? `Certification fee payment issued — $${Number(p.amount).toFixed(2)}` : `Commission payment issued — $${Number(p.amount).toFixed(2)}`, html);
       if (result.skipped) return json({ emailed: false, reason: "Email service not configured." });
       if (result.error) return bad("Email failed: " + result.error, 502);
       p.statementEmailedAt = new Date().toISOString();
