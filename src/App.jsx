@@ -1452,6 +1452,7 @@ function RegisterModal({ cls, onClose, onComplete, onRemoteComplete, codes = [],
   const [step, setStep] = useState(1);
   const [paying, setPaying] = useState(false);
   const [codeInput, setCodeInput] = useState("");
+  const [creditRef, setCreditRef] = useState("");
   const [applied, setApplied] = useState(null);   // the matched code object
   const [codeMsg, setCodeMsg] = useState(null);   // { ok, text }
   const [passcode, setPasscode] = useState("");
@@ -1511,6 +1512,19 @@ function RegisterModal({ cls, onClose, onComplete, onRemoteComplete, codes = [],
 
   const payNow = async () => {
     setPaying(true); setPayErr(null);
+    if (creditRef.trim()) {
+      try {
+        const r = await apiPost("register-with-credit", {
+          classId: cls.id, ref: creditRef.trim().toUpperCase(),
+          student: { name: f.name, email: f.email, phone: f.phone, company: f.company },
+        });
+        if (r.free) { if (onRemoteComplete) await onRemoteComplete({ email: f.email.trim(), ref: r.ref }); return; }
+      } catch (e) {
+        setPayErr(e.local ? "No-show credits can only be redeemed on the live site." : e.message);
+        setPaying(false);
+        return;
+      }
+    }
     try {
       const r = await apiPost("create-checkout", {
         classId: cls.id,
@@ -1620,6 +1634,13 @@ function RegisterModal({ cls, onClose, onComplete, onRemoteComplete, codes = [],
               <div style={{ ...mono, fontSize: 12, marginTop: 6, color: codeMsg.ok ? C.ok : C.warn }}>{codeMsg.text}</div>
             )}
           </div>
+          <div>
+            <FieldLabel>No-show credit — REF # (optional)</FieldLabel>
+            <input value={creditRef} onChange={(e) => { setCreditRef(e.target.value); setPayErr(null); }}
+              placeholder="e.g. REG-A1B2C3 — from your original confirmation email"
+              style={{ ...mono, width: "100%", boxSizing: "border-box", padding: "10px 12px", border: `1px solid ${C.line}`, fontSize: 14, background: C.panel2, color: C.text, textTransform: "uppercase" }} />
+            <div style={{ ...mono, fontSize: 11, color: C.muted, marginTop: 5 }}>Missed a class you paid for? Enter the REF # from that registration — no new payment needed.</div>
+          </div>
           <div style={{ background: C.panel2, border: `1px solid ${C.line}`, padding: "12px 14px", display: "grid", gap: 4 }}>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, color: C.muted }}>
               <span>Class fee</span><span style={mono}>${cls.price.toFixed(2)}</span>
@@ -1633,10 +1654,13 @@ function RegisterModal({ cls, onClose, onComplete, onRemoteComplete, codes = [],
               <span>Total due</span><span style={mono}>${total.toFixed(2)}</span>
             </div>
           </div>
+          <div style={{ ...mono, fontSize: 11, color: C.muted, lineHeight: 1.6 }}>
+            <strong style={{ color: C.bronzeLight }}>No-refund policy:</strong> all registrations are final. If you're unable to attend, your paid registration converts to a one-time credit toward a future class of the same type — keep the REF # from your confirmation email.
+          </div>
           {payErr && <div style={{ ...mono, fontSize: 12, color: C.warn }}>{payErr}</div>}
           <div style={{ display: "flex", gap: 10 }}>
             <Btn ghost onClick={() => setStep(1)}>Back</Btn>
-            <Btn onClick={payNow} disabled={paying}>{paying ? "Processing…" : `Pay $${total.toFixed(2)} securely`}</Btn>
+            <Btn onClick={payNow} disabled={paying}>{paying ? "Processing…" : creditRef.trim() ? "Register with no-show credit" : `Pay $${total.toFixed(2)} securely`}</Btn>
           </div>
         </div>
       )}
@@ -1852,7 +1876,7 @@ function TotpQr({ email, secret }) {
   );
 }
 
-function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", roleName = "Instructor", keyLabel = "Instructor enrollment key", keyHint = "Issued after certification", inviteToken = null }) {
+function AuthGate({ accounts, updateAccounts, onSignedIn, enrollKey = "SHIELD", roleName = "Instructor", keyLabel = "Instructor Certification Number", keyHint = "On your certificate, e.g. CERT-A1B2C3", inviteToken = null }) {
   const [mode, setMode] = useState(inviteToken ? "signup" : "signin"); // signin | signup | totp-setup | challenge
   const [err, setErr] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -2304,6 +2328,14 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts, isAdmin = f
     setConfirmDeleteId(null); setConfirmCancelId(null); setEditingId(null);
   };
 
+  const toggleNoShow = async (cls, student) => {
+    await updateClasses(classes.map((c) => (c.id !== cls.id ? c : {
+      ...c,
+      enrolled: (c.enrolled || []).map((s) => (s.ref === student.ref ? (s.noShow ? (() => { const { noShow, ...rest } = s; return rest; })() : { ...s, noShow: true }) : s)),
+    })));
+  };
+  const attendingN = (c) => (c.enrolled || []).filter((s) => !s.noShow).length;
+
   /* ---- scanned signed roster (PDF) per class ---- */
   const [scanErr, setScanErr] = useState(null);
   const uploadRosterScan = (cls) => (e) => {
@@ -2324,9 +2356,11 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts, isAdmin = f
 
   const graduate = async (cls) => {
     if (enrolledN(cls) === 0) return;
+    if (!cls.rosterScan) return; // the signed roster must be on file before certifications are issued
+    if (attendingN(cls) === 0) return; // nobody attended — cancel the class instead
     const issued = new Date();
     const expires = new Date(issued); expires.setMonth(expires.getMonth() + 24);
-    const newCerts = (cls.enrolled || []).map((s) => ({
+    const newCerts = (cls.enrolled || []).filter((s) => !s.noShow).map((s) => ({
       certId: "CERT-" + uid(),
       name: s.name, email: s.email, phone: s.phone || "",
       classId: cls.id, type: cls.type,
@@ -2335,6 +2369,12 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts, isAdmin = f
     }));
     await updateCerts([...certs, ...newCerts]);
     await updateClasses(classes.map((c) => (c.id === cls.id ? { ...c, completed: true } : c)));
+    const notifiable = newCerts.filter((c) => /@/.test(c.email || ""));
+    const classLabel = cls.type === "instructor" ? "Instructor Certification Course" : "Guardian 2-Day Certification";
+    const noShows = (cls.enrolled || []).filter((s) => s.noShow && /@/.test(s.email || "")).map((s) => ({ name: s.name, email: s.email, ref: s.ref, classDate: cls.date, classLabel }));
+    if (notifiable.length || noShows.length) {
+      try { await apiPost("auth/notify-certified", { certs: notifiable.map((c) => ({ name: c.name, email: c.email, certId: c.certId, issued: c.issued, expires: c.expires, type: c.type })), noShows }); } catch (e) { /* email is best-effort; certs are already issued */ }
+    }
   };
 
   const inputStyle = { width: "100%", padding: "10px 12px", border: `1px solid ${C.line}`, fontSize: 14, ...body, background: C.panel, color: C.text, boxSizing: "border-box" };
@@ -2455,6 +2495,7 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts, isAdmin = f
                   <th style={{ padding: "6px 8px", borderBottom: `1px solid ${C.line}` }}>COMPANY</th>
                   <th style={{ padding: "6px 8px", borderBottom: `1px solid ${C.line}` }}>REGISTERED</th>
                   <th style={{ padding: "6px 8px", borderBottom: `1px solid ${C.line}` }}>FORMS</th>
+                  <th style={{ padding: "6px 8px", borderBottom: `1px solid ${C.line}` }}>ATTENDANCE</th>
                   <th style={{ padding: "6px 8px", borderBottom: `1px solid ${C.line}` }}>REF</th>
                 </tr>
               </thead>
@@ -2470,6 +2511,17 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts, isAdmin = f
                       {s.waiverSignedAt
                         ? <button onClick={() => setWaiverView({ token: s.signToken, name: s.name })} style={{ background: "none", border: "none", color: C.ok, cursor: "pointer", ...mono, fontSize: 12, padding: 0, textDecoration: "underline" }}>✓ signed</button>
                         : <span style={{ color: C.warn }}>not signed</span>}
+                    </td>
+                    <td style={{ padding: "6px 8px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12 }}>
+                      {c.completed ? (
+                        s.noShow ? <span style={{ color: C.warn }}>No-show</span> : <span style={{ color: C.ok }}>Attended</span>
+                      ) : (
+                        <button onClick={() => toggleNoShow(c, s)}
+                          title="Check attendance against your signed roster"
+                          style={{ ...mono, fontSize: 11, background: "none", border: `1px solid ${s.noShow ? C.warn : C.ok}`, color: s.noShow ? C.warn : C.ok, padding: "3px 9px", cursor: "pointer", borderRadius: 2, whiteSpace: "nowrap" }}>
+                          {s.noShow ? "No-show ✕" : "Present ✓"}
+                        </button>
+                      )}
                     </td>
                     <td style={{ padding: "6px 8px", borderBottom: `1px solid ${C.panel2}`, ...mono, fontSize: 12 }}>{s.ref}</td>
                   </tr>
@@ -2500,7 +2552,21 @@ function PortalClasses({ classes, updateClasses, certs, updateCerts, isAdmin = f
                 <button onClick={() => setRosterFor(c)} style={btnStyle}>Print check-in roster</button>
               )}
               {!c.completed && !c.cancelled && enrolledN(c) > 0 && (
-                <Btn small onClick={() => graduate(c)}>Mark class complete & issue certifications</Btn>
+                c.rosterScan ? (
+                  attendingN(c) > 0 ? (
+                    <Btn small onClick={() => graduate(c)}>Mark class complete & issue certifications ({attendingN(c)} of {enrolledN(c)} attended)</Btn>
+                  ) : (
+                    <span style={{ ...mono, fontSize: 11, color: C.warn }}>Every student is marked No-show — nothing to certify. Reinstate attendance or cancel the class.</span>
+                  )
+                ) : (
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                    <button disabled title="Upload the signed class roster first"
+                      style={{ ...mono, fontSize: 12, background: "none", border: `1px solid ${C.line}`, color: C.muted, padding: "7px 14px", borderRadius: 2, cursor: "not-allowed" }}>
+                      Mark class complete & issue certifications
+                    </button>
+                    <span style={{ ...mono, fontSize: 11, color: C.warn }}>Upload the signed class roster (PDF) to unlock class completion. Mark any no-shows in the ATTENDANCE column — only students marked Present are certified.</span>
+                  </span>
+                )
               )}
               {(c.assistants || []).length > 0 && (
                 <span style={{ ...mono, fontSize: 11, color: C.muted, width: "100%" }}>Assisting: {(c.assistants || []).join(", ")}</span>
@@ -3291,9 +3357,6 @@ function Certificate({ cert }) {
               <div style={{ textAlign: "left" }}>
                 <div style={{ ...mono, fontSize: "clamp(8px, 1.1vw, 11px)", color: bronze, letterSpacing: "0.1em" }}>CERTIFICATE NO.</div>
                 <div style={{ ...mono, fontSize: "clamp(10px, 1.4vw, 14px)" }}>{cert.certId}</div>
-              </div>
-              <div>
-                <div style={{ borderTop: `1px solid ${ink}`, width: "clamp(120px, 18vw, 200px)", paddingTop: 4, ...serif, fontSize: "clamp(10px, 1.3vw, 13px)" }}>Certified Instructor</div>
               </div>
               <div>
                 <img src={SIGNATURE} alt="Aaron K. Gilbert signature"
