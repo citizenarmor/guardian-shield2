@@ -536,7 +536,7 @@ export default function App() {
   const nav = [
     ["home", "Home"],
     ["onguard", "OnGuard"],
-    ["product", "The Product"],
+    ["product", "The Shield"],
     ["training", "The Training"],
     ["schedule", "Class Schedule"],
     ["verify", "Verify a Certification"],
@@ -4005,7 +4005,7 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
   );
 }
 
-function AdminPhotos({ media, updateMedia, listKey = "photos", pageLabel = "The Product" }) {
+function AdminPhotos({ media, updateMedia, listKey = "photos", pageLabel = "The Shield" }) {
   const photos = media[listKey] || [];
   const put = (next) => updateMedia({ ...media, [listKey]: next });
   const [caption, setCaption] = useState("");
@@ -4102,7 +4102,7 @@ function AdminPhotos({ media, updateMedia, listKey = "photos", pageLabel = "The 
   );
 }
 
-function AdminVideos({ media, updateMedia, listKey = "videos", pageLabel = "The Product", allowHome = true }) {
+function AdminVideos({ media, updateMedia, listKey = "videos", pageLabel = "The Shield", allowHome = true }) {
   const videos = media[listKey] || [];
   const put = (extra) => updateMedia({ ...media, ...extra });
   const [f, setF] = useState({ title: "", url: "" });
