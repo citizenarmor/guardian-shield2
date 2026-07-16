@@ -120,6 +120,14 @@ function compressImageFile(file, maxDim = 900, quality = 0.72) {
 
 const phoneOk = (p) => String(p || "").replace(/\D/g, "").length >= 10;
 const SUPERUSER_EMAIL = "aaron@citizenarmor.com";
+const ONGUARD_TOOLS = [
+  { n: 1, title: "OnGuard Stop Card", href: "/onguard/stop-card.html",
+    desc: "The S.T.O.P. Card Builder. Create pocket-sized emergency action cards that put your facility's critical first moves — Secure, Tell, Observe, Protect — in every team member's hands before an incident ever starts." },
+  { n: 2, title: "OnGuard Facility Strategic Plan", href: "/onguard/facility-strategic-plan.html",
+    desc: "The PRIME Compass planning tool. Walk your organization through a complete facility security strategic plan — assessing risk, defining roles, and producing a written plan your leadership and team can stand behind." },
+  { n: 3, title: "OnGuard Training & Curriculum Generator", href: "/onguard/training-curriculum-generator.html",
+    desc: "Build a structured, repeatable training curriculum for your safety team — turning your strategic plan into scheduled, documented training your people actually complete." },
+];
 const isSuperUser = (u) => !!u && (u.email || "").toLowerCase() === SUPERUSER_EMAIL;
 
 const readPdfFile = (file, cb, onErr) => {
@@ -367,6 +375,7 @@ const classPlace = (c) => [c.location, [c.city, c.state].filter(Boolean).join(",
 export default function App() {
   const [view, setView] = useState("home");
   const [menuOpen, setMenuOpen] = useState(false);
+  const [ogOpen, setOgOpen] = useState(false);
   const [classes, setClasses] = useState([]);
   const [certs, setCerts] = useState([]);
   const [apps, setApps] = useState([]);
@@ -475,7 +484,7 @@ export default function App() {
     const invTok = q.get("invite");
     if (!reg && !deepView && !signTok && !invTok) return;
     try { window.history.replaceState({}, "", window.location.pathname); } catch (e) {}
-    const VALID_VIEWS = ["home", "product", "training", "schedule", "about", "verify", "instructor", "portal", "admin"];
+    const VALID_VIEWS = ["home", "product", "training", "schedule", "about", "verify", "instructor", "portal", "admin", "onguard"];
     if (signTok && signTok.length >= 10) { setSignToken(signTok); setView("sign"); }
     if (invTok && invTok.length >= 10) { setAdminInvite(invTok); setView("admin"); }
     if (deepView && VALID_VIEWS.includes(deepView)) setView(deepView);
@@ -531,6 +540,7 @@ export default function App() {
     ["verify", "Verify a Certification"],
     ["instructor", "Become an Instructor"],
     ["portal", "Instructor Portal"],
+    ["onguard", "OnGuard"],
   ];
 
   return (
@@ -549,12 +559,35 @@ export default function App() {
           </button>
           <nav className="gs-nav-desktop">
             {nav.map(([id, label]) => (
+              id === "onguard" ? (
+                <span key={id} style={{ position: "relative", display: "inline-block" }}
+                  onMouseEnter={() => setOgOpen(true)} onMouseLeave={() => setOgOpen(false)}>
+                  <button onClick={() => { setView(id); setOgOpen(false); }}
+                    style={{ ...display, fontWeight: 600, fontSize: 15, letterSpacing: "0.05em", textTransform: "uppercase",
+                      background: view === id ? C.bronze : "transparent", color: view === id ? "#1A1509" : C.text, border: "none",
+                      padding: "8px 12px", cursor: "pointer", borderRadius: 2 }}>
+                    {label} ▾
+                  </button>
+                  {ogOpen && (
+                    <div style={{ position: "absolute", right: 0, top: "100%", minWidth: 320, background: C.header, border: `1px solid ${C.bronzeDark}`, boxShadow: "0 10px 30px rgba(0,0,0,0.5)", zIndex: 60 }}>
+                      {ONGUARD_TOOLS.map((t) => (
+                        <a key={t.href} href={t.href} target="_blank" rel="noopener noreferrer" onClick={() => setOgOpen(false)}
+                          style={{ ...display, fontWeight: 600, fontSize: 14, letterSpacing: "0.04em", textTransform: "uppercase", display: "block",
+                            color: C.text, textDecoration: "none", padding: "12px 16px", borderBottom: `1px solid ${C.line}` }}>
+                          <span style={{ ...mono, color: C.bronze, fontSize: 12, marginRight: 8 }}>{t.n}.</span>{t.title}
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                </span>
+              ) : (
               <button key={id} onClick={() => setView(id)}
                 style={{ ...display, fontWeight: 600, fontSize: 15, letterSpacing: "0.05em", textTransform: "uppercase",
                   background: view === id ? C.bronze : "transparent", color: view === id ? "#1A1509" : C.text, border: "none",
                   padding: "8px 12px", cursor: "pointer", borderRadius: 2 }}>
                 {label}
               </button>
+              )
             ))}
           </nav>
           <button className="gs-nav-toggle" onClick={() => setMenuOpen(!menuOpen)} aria-label="Open menu" aria-expanded={menuOpen}
@@ -565,13 +598,23 @@ export default function App() {
         {menuOpen && (
           <div style={{ borderTop: `1px solid ${C.line}`, background: C.header }}>
             {nav.map(([id, label]) => (
-              <button key={id} onClick={() => { setView(id); setMenuOpen(false); }}
-                style={{ ...display, fontWeight: 600, fontSize: 17, letterSpacing: "0.05em", textTransform: "uppercase",
-                  display: "block", width: "100%", textAlign: "left",
-                  background: view === id ? C.bronze : "transparent", color: view === id ? "#1A1509" : C.text,
-                  border: "none", borderBottom: `1px solid ${C.line}`, padding: "14px 20px", cursor: "pointer" }}>
-                {label}
-              </button>
+              <React.Fragment key={id}>
+                <button onClick={() => { setView(id); setMenuOpen(false); }}
+                  style={{ ...display, fontWeight: 600, fontSize: 17, letterSpacing: "0.05em", textTransform: "uppercase",
+                    display: "block", width: "100%", textAlign: "left",
+                    background: view === id ? C.bronze : "transparent", color: view === id ? "#1A1509" : C.text,
+                    border: "none", borderBottom: `1px solid ${C.line}`, padding: "14px 20px", cursor: "pointer" }}>
+                  {label}
+                </button>
+                {id === "onguard" && ONGUARD_TOOLS.map((t) => (
+                  <a key={t.href} href={t.href} target="_blank" rel="noopener noreferrer" onClick={() => setMenuOpen(false)}
+                    style={{ ...display, fontWeight: 600, fontSize: 15, letterSpacing: "0.04em", textTransform: "uppercase",
+                      display: "block", width: "100%", textAlign: "left", boxSizing: "border-box", color: C.muted, textDecoration: "none",
+                      borderBottom: `1px solid ${C.line}`, padding: "12px 20px 12px 40px" }}>
+                    <span style={{ ...mono, color: C.bronze, fontSize: 12, marginRight: 8 }}>{t.n}.</span>{t.title}
+                  </a>
+                ))}
+              </React.Fragment>
             ))}
           </div>
         )}
@@ -606,6 +649,7 @@ export default function App() {
           {view === "home" && <Home go={setView} media={media} />}
           {view === "product" && <Product go={setView} media={media} />}
           {view === "about" && <About go={setView} />}
+          {view === "onguard" && <OnGuard />}
           {view === "admin" && (
             <AdminPortal
               user={adminUser} setUser={setAdminUser} instrAccounts={accounts}
@@ -1665,6 +1709,47 @@ function RegisterModal({ cls, onClose, onComplete, onRemoteComplete, codes = [],
         </div>
       )}
     </Modal>
+  );
+}
+
+/* ============================================================
+   ONGUARD PROGRAM
+   ============================================================ */
+function OnGuard() {
+  return (
+    <main style={{ maxWidth: 1140, margin: "0 auto", padding: "56px 20px 90px" }}>
+      <div style={{ ...mono, fontSize: 12, letterSpacing: "0.24em", color: C.bronze, textTransform: "uppercase" }}>The OnGuard Program</div>
+      <h1 style={{ ...display, fontWeight: 800, fontSize: "clamp(34px, 5vw, 52px)", textTransform: "uppercase", letterSpacing: "0.04em", color: C.bronzeLight, margin: "10px 0 22px" }}>
+        Prepared before it matters
+      </h1>
+      <p style={{ color: C.text, fontSize: 17, lineHeight: 1.75, maxWidth: 860, margin: "0 0 14px" }}>
+        The OnGuard program is Guardian Shield Training's readiness framework for organizations — churches, schools, businesses, and
+        community facilities that accept responsibility for the people inside their walls. Shield certification prepares the individual;
+        OnGuard prepares the organization around them. The program walks a facility through the three disciplines that decide the outcome
+        of a critical incident long before one begins: a written <strong style={{ color: C.bronzeLight }}>strategic security plan</strong> built
+        on an honest assessment of the facility, a <strong style={{ color: C.bronzeLight }}>training curriculum</strong> that turns that plan
+        into scheduled, documented practice, and a <strong style={{ color: C.bronzeLight }}>S.T.O.P. Card</strong> that puts each team
+        member's critical first actions in their pocket. Used together, the three tools below take a security team from good intentions
+        to a documented, drilled, and defensible state of readiness.
+      </p>
+      <p style={{ color: C.muted, fontSize: 14, lineHeight: 1.7, maxWidth: 860, margin: "0 0 40px" }}>
+        Each tool opens in its own workspace. Your work stays on your device — build, refine, and print or save your documents when ready.
+      </p>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 20 }}>
+        {ONGUARD_TOOLS.map((t) => (
+          <div key={t.href} style={{ background: C.panel, border: `1px solid ${C.line}`, padding: "26px 26px 24px", display: "flex", flexDirection: "column", gap: 14 }}>
+            <div style={{ ...mono, fontSize: 13, color: C.bronze }}>{String(t.n).padStart(2, "0")}</div>
+            <div style={{ ...display, fontWeight: 700, fontSize: 22, textTransform: "uppercase", letterSpacing: "0.03em", color: C.bronzeLight, lineHeight: 1.2 }}>{t.title}</div>
+            <p style={{ color: C.muted, fontSize: 14.5, lineHeight: 1.65, margin: 0, flex: 1 }}>{t.desc}</p>
+            <a href={t.href} target="_blank" rel="noopener noreferrer"
+              style={{ ...display, fontWeight: 700, fontSize: 15, letterSpacing: "0.06em", textTransform: "uppercase", alignSelf: "flex-start",
+                background: C.bronze, color: "#1A1509", textDecoration: "none", padding: "12px 22px", borderRadius: 2 }}>
+              Open the tool →
+            </a>
+          </div>
+        ))}
+      </div>
+    </main>
   );
 }
 
