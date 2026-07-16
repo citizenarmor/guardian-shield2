@@ -1810,7 +1810,7 @@ function Store({ notice = null, clearNotice = () => {} }) {
           🛒 Cart ({cartCount}){cartCount ? ` — ${priceStr(cartTotal)}` : ""}
         </button>
       </div>
-      <p style={{ color: C.muted, fontSize: 15, margin: "6px 0 28px", maxWidth: 760 }}>Gear from The Armored Citizen — secure checkout by Stripe, shipped to your door.</p>
+      <p style={{ color: C.muted, fontSize: 15, margin: "6px 0 28px", maxWidth: 760 }}>Gear from trusted tactical suppliers — secure checkout by Stripe, shipped to your door.</p>
 
       {banner === "success" && (
         <div style={{ ...mono, fontSize: 13, color: C.ok, background: "#1C2A21", border: `1px solid ${C.ok}`, padding: "12px 16px", marginBottom: 22 }}>
