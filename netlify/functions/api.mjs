@@ -317,7 +317,7 @@ async function validateRegistration({ classId, student, discountCode, passcode }
     const k = codes.find((c) => c.code.toUpperCase() === t);
     const expired = k?.expires && new Date(k.expires + "T23:59:59") < new Date();
     const usedUp = k?.maxUses && (k.uses || 0) >= Number(k.maxUses);
-    if (k && k.active && !expired && !usedUp) {
+    if (k && k.active && !expired && !usedUp && (k.scope || "classes") !== "store") {
       const discount = k.kind === "percent"
         ? Math.round(cls.price * Math.min(Number(k.value), 100)) / 100
         : Math.min(Number(k.value), cls.price);
@@ -807,6 +807,10 @@ async function handleStorage(req, key, sess) {
     const v = await store().get(key);
     return json({ key, value: v });
   }
+  if (method === "GET" && key === "gs:products" && !sess) {
+    const products = await readJson("gs:products", []);
+    return json({ key, value: JSON.stringify(products.filter((pr) => pr && pr.active !== false)) });
+  }
 
   // Everything else requires a session
   if (!sess) return bad("Sign in required.", 401);
@@ -815,10 +819,10 @@ async function handleStorage(req, key, sess) {
   //  - instructors: full app data (classes, certs, apps, notices, codes, requests, resumes)
   //  - admins: media, plus reporting/user-management data (certs, classes, payments, settings)
   const instructorKeys = /^gs:(classes|certs|apps|notices|codes|requests|resume:.+|doc:.+)$/;
-  const adminKeys = /^gs:(media|certs|classes|payments|settings|apps|requests|codes|notices|resume:.+|doc:.+)$/;
+  const adminKeys = /^gs:(media|certs|classes|payments|settings|apps|requests|codes|notices|products|orders|deals|resume:.+|doc:.+)$/;
 
   const canRead = sess.role === "instructor"
-    ? key === "gs:media" || instructorKeys.test(key)
+    ? key === "gs:media" || key === "gs:deals" || instructorKeys.test(key)
     : adminKeys.test(key);
   const canWrite = sess.role === "instructor"
     ? instructorKeys.test(key)
@@ -855,6 +859,74 @@ async function handleRegister(body) {
 }
 
 /* ---- Stripe: create a hosted checkout session ---- */
+async function handleStoreCheckout(req, body) {
+  const { items, customer } = body;
+  if (!customer?.name?.trim() || !/@/.test(customer?.email || "")) return bad("Your name and a valid email are required.");
+  if (!Array.isArray(items) || items.length === 0) return bad("Your cart is empty.");
+  if (items.length > 30) return bad("Too many items in one order.");
+  const products = await readJson("gs:products", []);
+  const line = [];
+  for (const it of items) {
+    const prod = products.find((x) => x && x.id === it.id && x.active !== false);
+    if (!prod) return bad("An item in your cart is no longer available. Refresh the store and try again.");
+    const qty = Math.max(1, Math.min(99, Math.round(Number(it.qty) || 1)));
+    line.push({ id: prod.id, name: String(prod.name || "Item").slice(0, 120), price: Math.round((Number(prod.price) || 0) * 100) / 100, qty });
+  }
+  const total = Math.round(line.reduce((n, l) => n + l.price * l.qty, 0) * 100) / 100;
+  if (total <= 0) return bad("Order total must be greater than zero.");
+
+  /* optional discount code — store-scoped codes only */
+  let appliedCode = "", coupon = null;
+  if (body.discountCode) {
+    const codes = await readJson("gs:codes", []);
+    const t = String(body.discountCode).trim().toUpperCase();
+    const k = codes.find((c) => c.code.toUpperCase() === t);
+    const expired = k?.expires && new Date(k.expires + "T23:59:59") < new Date();
+    const usedUp = k?.maxUses && (k.uses || 0) >= Number(k.maxUses);
+    const scope = k ? (k.scope || "classes") : "classes";
+    if (k && k.active && !expired && !usedUp && scope !== "classes") {
+      const discount = k.kind === "percent"
+        ? Math.round(total * Math.min(Number(k.value), 100)) / 100
+        : Math.min(Number(k.value), total);
+      if (total - discount <= 0) return bad("That code makes the order free — contact us and we'll arrange your order directly.");
+      appliedCode = k.code.toUpperCase();
+      coupon = k.kind === "percent"
+        ? { "percent_off": Math.min(Number(k.value), 100) }
+        : { "amount_off": Math.round(Math.min(Number(k.value), total) * 100), "currency": "usd" };
+    } else if (body.discountCode) {
+      return bad("That discount code can't be applied to this order.");
+    }
+  }
+
+  if (!STRIPE_SECRET) return json({ demo: true });
+
+  const origin = new URL(req.url).origin;
+  const params = {
+    mode: "payment",
+    customer_email: customer.email.trim(),
+    "shipping_address_collection[allowed_countries][0]": "US",
+    success_url: `${origin}/?store=success&session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${origin}/?store=cancel`,
+  };
+  line.forEach((l, i) => {
+    params[`line_items[${i}][quantity]`] = l.qty;
+    params[`line_items[${i}][price_data][currency]`] = "usd";
+    params[`line_items[${i}][price_data][unit_amount]`] = Math.round(l.price * 100);
+    params[`line_items[${i}][price_data][product_data][name]`] = l.name;
+  });
+  if (coupon) {
+    const c = await stripeReq("coupons", { duration: "once", ...coupon });
+    params["discounts[0][coupon]"] = c.id;
+  }
+  const session = await stripeReq("checkout/sessions", params);
+  await writeJson(`gs:pendorder:${session.id}`, {
+    items: line, discountCode: appliedCode,
+    customer: { name: customer.name.trim(), email: customer.email.trim(), phone: String(customer.phone || "").trim() },
+    expires: Date.now() + 4 * 3600 * 1000,
+  });
+  return json({ url: session.url });
+}
+
 async function handleRegisterWithCredit(body) {
   const { classId, ref, student } = body;
   if (!student?.name?.trim() || !/@/.test(student?.email || "")) return bad("Name and a valid email are required.");
@@ -945,6 +1017,51 @@ async function handleStripeWebhook(req) {
       });
       await store().delete(`gs:pendreg:${session.id}`);
     }
+    const pendOrder = await readJson(`gs:pendorder:${session.id}`, null);
+    if (pendOrder) {
+      const orders = await readJson("gs:orders", []);
+      const ship = session.shipping_details || null;
+      const order = {
+        id: "ORD-" + uid(), at: new Date().toISOString(),
+        customer: pendOrder.customer, items: pendOrder.items,
+        total: (session.amount_total ?? 0) / 100,
+        paymentRef: session.payment_intent || session.id,
+        discountCode: pendOrder.discountCode || "",
+        shipping: ship ? { name: ship.name || "", address: ship.address || null } : null,
+      };
+      orders.unshift(order);
+      await writeJson("gs:orders", orders);
+      if (pendOrder.discountCode) {
+        const codesAll = await readJson("gs:codes", []);
+        const kk = codesAll.find((c) => c.code.toUpperCase() === pendOrder.discountCode.toUpperCase());
+        if (kk) { kk.uses = (kk.uses || 0) + 1; await writeJson("gs:codes", codesAll); }
+      }
+      await store().delete(`gs:pendorder:${session.id}`);
+      /* order emails — best effort, never block the webhook */
+      try {
+        const cell = 'padding:6px 8px;border-bottom:1px solid #3A3527;';
+        const rows = order.items.map((i) => `<tr><td style="${cell}">${esc(i.name)}</td><td style="${cell}">${i.qty}</td><td style="${cell}">$${(i.price * i.qty).toFixed(2)}</td></tr>`).join("");
+        const addr = order.shipping && order.shipping.address ? [order.shipping.name, order.shipping.address.line1, order.shipping.address.line2, `${order.shipping.address.city || ""}, ${order.shipping.address.state || ""} ${order.shipping.address.postal_code || ""}`].filter(Boolean).map(esc).join("<br>") : "";
+        await sendEmail(order.customer.email, `Order confirmed — ${order.id}`, `
+          <p>Thanks for your order, ${esc((order.customer.name || "there").split(" ")[0])}!</p>
+          <p>Your payment was received and your order is confirmed.</p>
+          <table width="100%" style="border-collapse:collapse;font-size:13px;color:#EAE3D2;">
+            <tr>${["ITEM","QTY","AMOUNT"].map((h) => `<th align="left" style="padding:6px 8px;border-bottom:2px solid #C9A45C;color:#C9A45C;font-size:10px;letter-spacing:1px;">${h}</th>`).join("")}</tr>
+            ${rows}
+            <tr><td colspan="2" align="right" style="padding:10px 8px;color:#C9A45C;font-size:11px;letter-spacing:1px;">ORDER TOTAL</td><td style="padding:10px 8px;font-size:16px;"><strong>$${order.total.toFixed(2)}</strong></td></tr>
+          </table>
+          ${addr ? `<p style="font-size:13px;color:#A99F86;">Shipping to:<br>${addr}</p>` : ""}
+          <p style="font-size:12px;color:#A99F86;">Order reference: <strong style="color:#C9A45C;">${order.id}</strong> · Keep this email for your records. Questions? Reply to this email.</p>`);
+        if (ADMIN_NOTIFY) {
+          await sendEmail(ADMIN_NOTIFY, `Store order — ${order.id} — $${order.total.toFixed(2)}`, `
+            <p><strong>New store order.</strong></p>
+            <p>${esc(order.customer.name)} &lt;${esc(order.customer.email)}&gt;</p>
+            <table width="100%" style="border-collapse:collapse;font-size:13px;color:#EAE3D2;">${rows}</table>
+            <p>Total: <strong>$${order.total.toFixed(2)}</strong> · Payment: ${esc(order.paymentRef)}</p>
+            ${addr ? `<p style="font-size:13px;color:#A99F86;">Ship to:<br>${addr}</p>` : ""}`);
+        }
+      } catch (e) { console.error("order email error:", e); }
+    }
   }
   return json({ received: true });
 }
@@ -969,16 +1086,20 @@ async function handleCheckoutStatus(url) {
 async function handleCheckCode(url) {
   const codeQ = String(url.searchParams.get("code") || "").trim().toUpperCase();
   const price = Number(url.searchParams.get("price") || 0);
+  const usedFor = url.searchParams.get("for") === "store" ? "store" : "class";
   const codes = await readJson("gs:codes", []);
   const k = codes.find((c) => c.code.toUpperCase() === codeQ);
   if (!k) return bad("That code isn't valid.", 404);
   if (!k.active) return bad("That code is no longer active.", 410);
   if (k.expires && new Date(k.expires + "T23:59:59") < new Date()) return bad("That code has expired.", 410);
   if (k.maxUses && (k.uses || 0) >= Number(k.maxUses)) return bad("That code has reached its usage limit.", 410);
+  const scope = k.scope || "classes";
+  if (usedFor === "class" && scope === "store") return bad("That code is valid in the store only.", 410);
+  if (usedFor === "store" && scope === "classes") return bad("That code is valid for class registrations only.", 410);
   const discount = k.kind === "percent"
     ? Math.round(price * Math.min(Number(k.value), 100)) / 100
     : Math.min(Number(k.value), price);
-  return json({ code: k.code.toUpperCase(), kind: k.kind, value: k.value, discount });
+  return json({ code: k.code.toUpperCase(), kind: k.kind, value: k.value, scope, discount });
 }
 
 async function handleCheckPasscode(url) {
@@ -1362,6 +1483,7 @@ export default async (req) => {
     if (path === "register" && req.method === "POST") return await handleRegister(body);
     if (path === "create-checkout" && req.method === "POST") return await handleCreateCheckout(req, body);
     if (path === "register-with-credit" && req.method === "POST") return await handleRegisterWithCredit(body);
+    if (path === "store-checkout" && req.method === "POST") return await handleStoreCheckout(req, body);
     if (path === "checkout-status") return await handleCheckoutStatus(url);
     if (path === "check-code") return await handleCheckCode(url);
     if (path === "check-passcode") return await handleCheckPasscode(url);

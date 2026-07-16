@@ -120,6 +120,7 @@ function compressImageFile(file, maxDim = 900, quality = 0.72) {
 
 const phoneOk = (p) => String(p || "").replace(/\D/g, "").length >= 10;
 const SUPERUSER_EMAIL = "aaron@citizenarmor.com";
+const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const ONGUARD_TOOLS = [
   { n: 1, title: "OnGuard Stop Card", href: "/onguard/stop-card.html",
     desc: "The S.T.O.P. Card Builder. Create pocket-sized emergency action cards that put your facility's critical first moves — Secure, Tell, Observe, Protect — in every team member's hands before an incident ever starts." },
@@ -475,6 +476,7 @@ export default function App() {
 
   // Returning from Stripe checkout (?reg=success|cancel)
   const [stripeReturn, setStripeReturn] = useState(null);
+  const [storeNotice, setStoreNotice] = useState(null);
   const [signToken, setSignToken] = useState(null);
   const [adminInvite, setAdminInvite] = useState(null);
   useEffect(() => {
@@ -484,9 +486,11 @@ export default function App() {
     const deepView = q.get("view");
     const signTok = q.get("sign");
     const invTok = q.get("invite");
-    if (!reg && !deepView && !signTok && !invTok) return;
+    const storeRet = q.get("store");
+    if (!reg && !deepView && !signTok && !invTok && !storeRet) return;
     try { window.history.replaceState({}, "", window.location.pathname); } catch (e) {}
-    const VALID_VIEWS = ["home", "product", "training", "schedule", "about", "verify", "instructor", "portal", "admin", "onguard"];
+    const VALID_VIEWS = ["home", "product", "training", "schedule", "about", "verify", "instructor", "portal", "admin", "onguard", "store"];
+    if (storeRet === "success" || storeRet === "cancel") { setStoreNotice(storeRet); setView("store"); }
     if (signTok && signTok.length >= 10) { setSignToken(signTok); setView("sign"); }
     if (invTok && invTok.length >= 10) { setAdminInvite(invTok); setView("admin"); }
     if (deepView && VALID_VIEWS.includes(deepView)) setView(deepView);
@@ -539,6 +543,7 @@ export default function App() {
     ["product", "The Shield"],
     ["training", "The Training"],
     ["schedule", "Class Schedule"],
+    ["store", "Store"],
     ["verify", "Verify a Certification"],
     ["instructor", "Become an Instructor"],
     ["portal", "Instructor Portal"],
@@ -652,6 +657,7 @@ export default function App() {
           {view === "product" && <Product go={setView} media={media} />}
           {view === "about" && <About go={setView} />}
           {view === "onguard" && <OnGuard />}
+          {view === "store" && <Store notice={storeNotice} clearNotice={() => setStoreNotice(null)} />}
           {view === "admin" && (
             <AdminPortal
               user={adminUser} setUser={setAdminUser} instrAccounts={accounts}
@@ -1715,6 +1721,564 @@ function RegisterModal({ cls, onClose, onComplete, onRemoteComplete, codes = [],
 }
 
 /* ============================================================
+   STORE
+   ============================================================ */
+const CART_LS = "gsStoreCart";
+const loadCart = () => { try { const v = JSON.parse(localStorage.getItem(CART_LS) || "[]"); return Array.isArray(v) ? v : []; } catch (e) { return []; } };
+const persistCart = (c) => { try { localStorage.setItem(CART_LS, JSON.stringify(c)); } catch (e) {} };
+
+function Store({ notice = null, clearNotice = () => {} }) {
+  const [products, setProducts] = useState(null);
+  const [cart, setCart] = useState(loadCart);
+  const [detail, setDetail] = useState(null);
+  const [imgIdx, setImgIdx] = useState(0);
+  const [qty, setQty] = useState(1);
+  const [cartOpen, setCartOpen] = useState(false);
+  const [co, setCo] = useState({ name: "", email: "" });
+  const [storeCode, setStoreCode] = useState("");
+  const [applied, setApplied] = useState(null);
+  const [codeMsg2, setCodeMsg2] = useState(null);
+  const [coErr, setCoErr] = useState(null);
+  const [coBusy, setCoBusy] = useState(false);
+  const [banner, setBanner] = useState(notice);
+
+  useEffect(() => { loadKey("gs:products", []).then((p) => setProducts((p || []).filter((x) => x && x.active !== false))); }, []);
+  useEffect(() => {
+    if (notice === "success") { setCart([]); persistCart([]); }
+    if (notice) { setBanner(notice); clearNotice(); }
+  }, [notice]);
+
+  const setCartAnd = (next) => { setCart(next); persistCart(next); };
+  const addToCart = (prod, n) => {
+    const next = [...cart];
+    const hit = next.find((c) => c.id === prod.id);
+    if (hit) hit.qty = Math.min(99, hit.qty + n); else next.push({ id: prod.id, qty: Math.min(99, n) });
+    setCartAnd(next.map((c) => ({ ...c })));
+    setDetail(null); setCartOpen(true);
+  };
+  const changeQty = (id, d) => setCartAnd(cart.map((c) => (c.id === id ? { ...c, qty: Math.max(1, Math.min(99, c.qty + d)) } : c)));
+  const removeItem = (id) => setCartAnd(cart.filter((c) => c.id !== id));
+
+  const lines = (products || []).length ? cart.map((c) => ({ ...c, prod: (products || []).find((p) => p.id === c.id) })).filter((l) => l.prod) : [];
+  const cartCount = lines.reduce((n, l) => n + l.qty, 0);
+  const cartTotal = round2(lines.reduce((n, l) => n + l.qty * (Number(l.prod.price) || 0), 0));
+  const codeDiscount = applied ? (applied.kind === "percent" ? round2(cartTotal * Math.min(Number(applied.value), 100) / 100) : Math.min(Number(applied.value), cartTotal)) : 0;
+  const dueTotal = round2(Math.max(0, cartTotal - codeDiscount));
+
+  const applyStoreCode = async () => {
+    const t = storeCode.trim().toUpperCase();
+    if (!t) return;
+    setCodeMsg2(null);
+    try {
+      const r = await apiGet(`check-code?code=${encodeURIComponent(t)}&price=${cartTotal}&for=store`);
+      setApplied(r);
+      setCodeMsg2({ ok: true, text: `✓ ${r.code} applied — ${r.kind === "percent" ? `${r.value}% off` : `$${r.value} off`}.` });
+    } catch (e) {
+      setApplied(null);
+      setCodeMsg2({ ok: false, text: e.local ? "Codes can be checked on the live site." : e.message });
+    }
+  };
+
+  const checkout = async () => {
+    setCoErr(null);
+    if (!co.name.trim()) return setCoErr("Enter your name.");
+    if (!/@/.test(co.email)) return setCoErr("Enter a valid email address.");
+    if (!lines.length) return setCoErr("Your cart is empty.");
+    setCoBusy(true);
+    try {
+      const r = await apiPost("store-checkout", { items: lines.map((l) => ({ id: l.id, qty: l.qty })), customer: { name: co.name, email: co.email }, discountCode: applied ? applied.code : "" });
+      if (r.url) { window.location.href = r.url; return; }
+      setCoErr(r.demo ? "Checkout is available on the live site." : "Couldn't start checkout — try again.");
+    } catch (e) {
+      setCoErr(e.local ? "Checkout is available on the live site." : e.message);
+    }
+    setCoBusy(false);
+  };
+
+  const priceStr = (p) => `$${(Number(p) || 0).toFixed(2)}`;
+  const mainImg = (p) => (p.images && p.images[0]) || null;
+
+  return (
+    <main style={{ maxWidth: 1140, margin: "0 auto", padding: "56px 20px 90px" }}>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 16, flexWrap: "wrap", marginBottom: 8 }}>
+        <div style={{ flex: 1, minWidth: 260 }}>
+          <div style={{ ...mono, fontSize: 12, letterSpacing: "0.24em", color: C.bronze, textTransform: "uppercase" }}>Guardian Shield Store</div>
+          <h1 style={{ ...display, fontWeight: 800, fontSize: "clamp(34px, 5vw, 52px)", textTransform: "uppercase", letterSpacing: "0.04em", color: C.bronzeLight, margin: "10px 0 0" }}>Store</h1>
+        </div>
+        <button onClick={() => setCartOpen(true)}
+          style={{ ...display, fontWeight: 700, fontSize: 16, letterSpacing: "0.05em", textTransform: "uppercase", background: cartCount ? C.bronze : "transparent", color: cartCount ? "#1A1509" : C.bronze, border: `1px solid ${C.bronze}`, padding: "12px 20px", cursor: "pointer", borderRadius: 2 }}>
+          🛒 Cart ({cartCount}){cartCount ? ` — ${priceStr(cartTotal)}` : ""}
+        </button>
+      </div>
+      <p style={{ color: C.muted, fontSize: 15, margin: "6px 0 28px", maxWidth: 760 }}>Gear from The Armored Citizen — secure checkout by Stripe, shipped to your door.</p>
+
+      {banner === "success" && (
+        <div style={{ ...mono, fontSize: 13, color: C.ok, background: "#1C2A21", border: `1px solid ${C.ok}`, padding: "12px 16px", marginBottom: 22 }}>
+          ✓ Payment received — your order is confirmed. A receipt with your order reference is on its way to your email.
+        </div>
+      )}
+      {banner === "cancel" && (
+        <div style={{ ...mono, fontSize: 13, color: C.warn, background: "#2E1F16", border: `1px solid ${C.warn}`, padding: "12px 16px", marginBottom: 22 }}>
+          Checkout was cancelled — your cart is untouched.
+        </div>
+      )}
+
+      {products === null ? (
+        <p style={{ color: C.muted, ...mono, fontSize: 13 }}>Loading the store…</p>
+      ) : products.length === 0 ? (
+        <p style={{ color: C.muted, fontSize: 15 }}>New gear is on the way — check back soon.</p>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 20 }}>
+          {products.map((p) => (
+            <div key={p.id} style={{ background: C.panel, border: `1px solid ${C.line}`, display: "flex", flexDirection: "column" }}>
+              <div onClick={() => { setDetail(p); setImgIdx(0); setQty(1); }} style={{ cursor: "pointer", background: C.panel2, height: 210, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+                {mainImg(p) ? <img src={mainImg(p)} alt={p.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> :
+                  <span style={{ ...mono, color: C.muted, fontSize: 12 }}>NO PHOTO</span>}
+              </div>
+              <div style={{ padding: "16px 18px 18px", display: "flex", flexDirection: "column", gap: 8, flex: 1 }}>
+                <div style={{ ...display, fontWeight: 700, fontSize: 19, textTransform: "uppercase", letterSpacing: "0.02em", color: C.bronzeLight, lineHeight: 1.2 }}>{p.name}</div>
+                <div style={{ ...mono, fontSize: 16, color: C.text }}>{priceStr(p.price)}</div>
+                <div style={{ color: C.muted, fontSize: 13.5, lineHeight: 1.55, flex: 1, maxHeight: 63, overflow: "hidden" }}>{p.description}</div>
+                <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                  <Btn small ghost onClick={() => { setDetail(p); setImgIdx(0); setQty(1); }}>Details</Btn>
+                  <Btn small onClick={() => addToCart(p, 1)}>Add to cart</Btn>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* product detail */}
+      {detail && (
+        <div onClick={() => setDetail(null)} style={{ position: "fixed", inset: 0, background: "rgba(6,5,3,0.82)", zIndex: 80, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: C.panel, border: `1px solid ${C.bronzeDark}`, maxWidth: 880, width: "100%", maxHeight: "90vh", overflowY: "auto", padding: 24 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+              <div style={{ ...display, fontWeight: 800, fontSize: 26, textTransform: "uppercase", color: C.bronzeLight }}>{detail.name}</div>
+              <button onClick={() => setDetail(null)} style={{ background: "none", border: "none", color: C.muted, fontSize: 22, cursor: "pointer" }}>×</button>
+            </div>
+            <div className="gs-store-detail" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.1fr) minmax(0, 1fr)", gap: 22, marginTop: 14 }}>
+              <div>
+                <div style={{ background: C.panel2, border: `1px solid ${C.line}`, height: 320, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+                  {(detail.images || [])[imgIdx] ? <img src={detail.images[imgIdx]} alt={detail.name} style={{ width: "100%", height: "100%", objectFit: "contain" }} /> :
+                    <span style={{ ...mono, color: C.muted, fontSize: 12 }}>NO PHOTO</span>}
+                </div>
+                {(detail.images || []).length > 1 && (
+                  <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                    {detail.images.map((im, i) => (
+                      <img key={i} src={im} alt="" onClick={() => setImgIdx(i)}
+                        style={{ width: 62, height: 62, objectFit: "cover", cursor: "pointer", border: `2px solid ${i === imgIdx ? C.bronze : C.line}` }} />
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <div style={{ ...mono, fontSize: 22, color: C.text }}>{priceStr(detail.price)}</div>
+                <p style={{ color: C.text, fontSize: 14.5, lineHeight: 1.7, whiteSpace: "pre-wrap", margin: 0, flex: 1 }}>{detail.description}</p>
+                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <span style={{ ...mono, fontSize: 12, color: C.muted }}>QTY</span>
+                  <button onClick={() => setQty(Math.max(1, qty - 1))} style={{ ...mono, background: "none", border: `1px solid ${C.line}`, color: C.text, width: 34, height: 34, cursor: "pointer" }}>−</button>
+                  <span style={{ ...mono, fontSize: 16, color: C.text, minWidth: 26, textAlign: "center" }}>{qty}</span>
+                  <button onClick={() => setQty(Math.min(99, qty + 1))} style={{ ...mono, background: "none", border: `1px solid ${C.line}`, color: C.text, width: 34, height: 34, cursor: "pointer" }}>+</button>
+                </div>
+                <Btn onClick={() => addToCart(detail, qty)}>Add to cart — {priceStr((Number(detail.price) || 0) * qty)}</Btn>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* cart */}
+      {cartOpen && (
+        <div onClick={() => setCartOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(6,5,3,0.82)", zIndex: 80, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: C.panel, border: `1px solid ${C.bronzeDark}`, maxWidth: 640, width: "100%", maxHeight: "90vh", overflowY: "auto", padding: 24 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ ...display, fontWeight: 800, fontSize: 24, textTransform: "uppercase", color: C.bronzeLight }}>Your cart</div>
+              <button onClick={() => setCartOpen(false)} style={{ background: "none", border: "none", color: C.muted, fontSize: 22, cursor: "pointer" }}>×</button>
+            </div>
+            {lines.length === 0 ? (
+              <p style={{ color: C.muted, fontSize: 14, marginTop: 14 }}>Your cart is empty.</p>
+            ) : (
+              <>
+                <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
+                  {lines.map((l) => (
+                    <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 12, background: C.panel2, border: `1px solid ${C.line}`, padding: "10px 12px" }}>
+                      {mainImg(l.prod) && <img src={mainImg(l.prod)} alt="" style={{ width: 52, height: 52, objectFit: "cover" }} />}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ ...display, fontWeight: 700, fontSize: 15, textTransform: "uppercase", color: C.text }}>{l.prod.name}</div>
+                        <div style={{ ...mono, fontSize: 12, color: C.muted }}>{priceStr(l.prod.price)} each</div>
+                      </div>
+                      <button onClick={() => changeQty(l.id, -1)} style={{ ...mono, background: "none", border: `1px solid ${C.line}`, color: C.text, width: 30, height: 30, cursor: "pointer" }}>−</button>
+                      <span style={{ ...mono, fontSize: 14, color: C.text, minWidth: 22, textAlign: "center" }}>{l.qty}</span>
+                      <button onClick={() => changeQty(l.id, 1)} style={{ ...mono, background: "none", border: `1px solid ${C.line}`, color: C.text, width: 30, height: 30, cursor: "pointer" }}>+</button>
+                      <span style={{ ...mono, fontSize: 14, color: C.bronzeLight, minWidth: 72, textAlign: "right" }}>{priceStr(l.qty * (Number(l.prod.price) || 0))}</span>
+                      <button onClick={() => removeItem(l.id)} title="Remove" style={{ background: "none", border: "none", color: C.warn, cursor: "pointer", fontSize: 16 }}>✕</button>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 14, flexWrap: "wrap" }}>
+                  <input value={storeCode} onChange={(e) => { setStoreCode(e.target.value); }} placeholder="Discount code"
+                    style={{ ...mono, flex: 1, minWidth: 150, boxSizing: "border-box", padding: "9px 12px", border: `1px solid ${C.line}`, fontSize: 13, background: C.panel2, color: C.text, textTransform: "uppercase" }} />
+                  <Btn small ghost onClick={applyStoreCode}>Apply</Btn>
+                </div>
+                {codeMsg2 && <div style={{ ...mono, fontSize: 12, marginTop: 6, color: codeMsg2.ok ? C.ok : C.warn }}>{codeMsg2.text}</div>}
+                <div style={{ ...mono, fontSize: 16, color: C.bronzeLight, textAlign: "right", marginTop: 14 }}>
+                  {applied && codeDiscount > 0 && <span style={{ color: C.muted, fontSize: 13, marginRight: 14 }}>{priceStr(cartTotal)} − {priceStr(codeDiscount)} ({applied.code})</span>}
+                  Total: <strong>{priceStr(dueTotal)}</strong>
+                </div>
+                <div style={{ display: "grid", gap: 10, marginTop: 16 }}>
+                  <div>
+                    <FieldLabel>Full name</FieldLabel>
+                    <input value={co.name} onChange={(e) => setCo({ ...co, name: e.target.value })} style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", border: `1px solid ${C.line}`, fontSize: 14, ...body, background: C.panel2, color: C.text }} />
+                  </div>
+                  <div>
+                    <FieldLabel>Email</FieldLabel>
+                    <input type="email" value={co.email} onChange={(e) => setCo({ ...co, email: e.target.value })} style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", border: `1px solid ${C.line}`, fontSize: 14, ...body, background: C.panel2, color: C.text }} />
+                  </div>
+                  <div style={{ ...mono, fontSize: 11, color: C.muted, lineHeight: 1.6 }}>You'll enter your shipping address and card on Stripe's secure checkout page — card details never touch this site.</div>
+                  {coErr && <div style={{ ...mono, fontSize: 12, color: C.warn }}>{coErr}</div>}
+                  <Btn onClick={checkout} disabled={coBusy}>{coBusy ? "Starting checkout…" : `Checkout securely — ${priceStr(dueTotal)}`}</Btn>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </main>
+  );
+}
+
+/* ============================================================
+   ADMIN — STORE PRODUCTS & ORDERS
+   ============================================================ */
+function AdminStore({ products, saveProducts, orders }) {
+  const empty = { name: "", price: "", description: "", images: [] };
+  const [f, setF] = useState(empty);
+  const [editingId, setEditingId] = useState(null);
+  const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(null);
+
+  const addImages = async (e) => {
+    const files = [...(e.target.files || [])];
+    e.target.value = "";
+    if (!files.length) return;
+    const room = 5 - f.images.length;
+    if (room <= 0) return setErr("A product can have up to five pictures.");
+    setErr(null); setBusy(true);
+    const next = [...f.images];
+    for (const file of files.slice(0, room)) {
+      if (!file.type.startsWith("image/")) continue;
+      try { next.push(await compressImageFile(file)); } catch (ex) { /* skip bad file */ }
+    }
+    setF({ ...f, images: next });
+    if (files.length > room) setErr(`Only ${room} more picture${room === 1 ? "" : "s"} could be added — five per product.`);
+    setBusy(false);
+  };
+
+  const save = async () => {
+    if (!f.name.trim()) return setErr("Give the product a name.");
+    const price = Number(f.price);
+    if (!(price > 0)) return setErr("Enter a price greater than zero.");
+    setErr(null);
+    if (editingId) {
+      await saveProducts(products.map((p) => (p.id === editingId ? { ...p, name: f.name.trim(), price: round2(price), description: f.description.trim(), images: f.images.slice(0, 5) } : p)));
+    } else {
+      await saveProducts([{ id: "PRD-" + uid(), name: f.name.trim(), price: round2(price), description: f.description.trim(), images: f.images.slice(0, 5), active: true, created: new Date().toISOString() }, ...products]);
+    }
+    setF(empty); setEditingId(null);
+  };
+
+  const startEdit = (p) => { setEditingId(p.id); setF({ name: p.name, price: String(p.price), description: p.description || "", images: [...(p.images || [])] }); setErr(null); };
+  const toggleActive = (p) => saveProducts(products.map((x) => (x.id === p.id ? { ...x, active: x.active === false ? true : false } : x)));
+  const del = (p) => { saveProducts(products.filter((x) => x.id !== p.id)); setConfirmDel(null); };
+
+  const smallBtn = { ...mono, fontSize: 12, background: "none", border: `1px solid ${C.bronzeDark}`, color: C.bronze, padding: "5px 12px", cursor: "pointer", borderRadius: 2 };
+  const inputS = { width: "100%", boxSizing: "border-box", padding: "10px 12px", border: `1px solid ${C.line}`, fontSize: 14, ...body, background: C.panel2, color: C.text };
+  const th = { ...mono, fontSize: 11, letterSpacing: "0.08em", color: C.bronze, textAlign: "left", padding: "8px 10px", borderBottom: `1px solid ${C.bronzeDark}`, whiteSpace: "nowrap" };
+  const td = { padding: "8px 10px", borderBottom: `1px solid ${C.panel2}`, verticalAlign: "top" };
+  const tdm = { ...td, ...mono, fontSize: 12, whiteSpace: "nowrap" };
+
+  return (
+    <div style={{ display: "grid", gap: 26 }}>
+      {/* add / edit */}
+      <div style={{ background: C.panel, border: `1px solid ${editingId ? C.bronze : C.line}`, padding: "18px 20px", display: "grid", gap: 12, maxWidth: 760 }}>
+        <div style={{ ...display, fontWeight: 700, fontSize: 18, textTransform: "uppercase", color: C.bronzeLight }}>{editingId ? "Edit product" : "Add a product"}</div>
+        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10 }}>
+          <div><FieldLabel>Product name</FieldLabel><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} style={inputS} /></div>
+          <div><FieldLabel>Price ($)</FieldLabel><input type="number" min="0" step="0.01" value={f.price} onChange={(e) => setF({ ...f, price: e.target.value })} style={inputS} /></div>
+        </div>
+        <div>
+          <FieldLabel>Product description</FieldLabel>
+          <textarea value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} rows={5} style={{ ...inputS, resize: "vertical", fontFamily: "inherit" }} />
+        </div>
+        <div>
+          <FieldLabel>Pictures ({f.images.length} of 5)</FieldLabel>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            {f.images.map((im, i) => (
+              <span key={i} style={{ position: "relative", display: "inline-block" }}>
+                <img src={im} alt="" style={{ width: 84, height: 84, objectFit: "cover", border: `1px solid ${C.line}` }} />
+                <button onClick={() => setF({ ...f, images: f.images.filter((_, j) => j !== i) })} title="Remove picture"
+                  style={{ position: "absolute", top: -8, right: -8, background: C.warn, color: "#1A1509", border: "none", borderRadius: "50%", width: 20, height: 20, cursor: "pointer", fontSize: 11, lineHeight: 1 }}>✕</button>
+              </span>
+            ))}
+            {f.images.length < 5 && (
+              <label style={{ ...smallBtn, display: "inline-block" }}>
+                {busy ? "Processing…" : "+ Add pictures"}
+                <input type="file" accept="image/*" multiple onChange={addImages} style={{ display: "none" }} />
+              </label>
+            )}
+          </div>
+        </div>
+        {err && <div style={{ ...mono, fontSize: 12, color: C.warn }}>{err}</div>}
+        <div style={{ display: "flex", gap: 10 }}>
+          <Btn small onClick={save} disabled={busy}>{editingId ? "Save changes" : "Add product to store"}</Btn>
+          {editingId && <Btn small ghost onClick={() => { setEditingId(null); setF(empty); setErr(null); }}>Cancel</Btn>}
+        </div>
+      </div>
+
+      {/* product list */}
+      <div>
+        <div style={{ ...display, fontWeight: 700, fontSize: 18, textTransform: "uppercase", color: C.bronzeLight, marginBottom: 12 }}>Products ({products.length})</div>
+        {products.length === 0 ? <p style={{ color: C.muted, fontSize: 14 }}>No products yet — add your first above.</p> : (
+          <div style={{ display: "grid", gap: 10 }}>
+            {products.map((p) => (
+              <div key={p.id} style={{ display: "flex", gap: 14, alignItems: "center", background: C.panel, border: `1px solid ${C.line}`, padding: "12px 14px", opacity: p.active === false ? 0.55 : 1 }}>
+                {(p.images || [])[0] ? <img src={p.images[0]} alt="" style={{ width: 62, height: 62, objectFit: "cover" }} /> :
+                  <div style={{ width: 62, height: 62, background: C.panel2, display: "flex", alignItems: "center", justifyContent: "center", ...mono, fontSize: 9, color: C.muted }}>NO PHOTO</div>}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ ...display, fontWeight: 700, fontSize: 16, textTransform: "uppercase", color: C.text }}>
+                    {p.name} {p.active === false && <span style={{ ...mono, fontSize: 10, color: C.warn, marginLeft: 8 }}>HIDDEN</span>}
+                  </div>
+                  <div style={{ ...mono, fontSize: 13, color: C.bronzeLight }}>${(Number(p.price) || 0).toFixed(2)} · {(p.images || []).length} picture{(p.images || []).length === 1 ? "" : "s"}</div>
+                  <div style={{ color: C.muted, fontSize: 12.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.description}</div>
+                </div>
+                <button style={smallBtn} onClick={() => startEdit(p)}>Edit</button>
+                <button style={smallBtn} onClick={() => toggleActive(p)}>{p.active === false ? "Show" : "Hide"}</button>
+                {confirmDel === p.id ? (
+                  <>
+                    <button style={{ ...smallBtn, borderColor: C.warn, color: C.warn }} onClick={() => del(p)}>Confirm delete</button>
+                    <button style={smallBtn} onClick={() => setConfirmDel(null)}>Keep</button>
+                  </>
+                ) : (
+                  <button style={{ ...smallBtn, borderColor: C.warn, color: C.warn }} onClick={() => setConfirmDel(p.id)}>Delete</button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* orders */}
+      <div>
+        <div style={{ ...display, fontWeight: 700, fontSize: 18, textTransform: "uppercase", color: C.bronzeLight, marginBottom: 12 }}>Orders ({orders.length})</div>
+        {orders.length === 0 ? <p style={{ color: C.muted, fontSize: 14 }}>No orders yet. Paid orders appear here automatically.</p> : (
+          <div style={{ overflowX: "auto", border: `1px solid ${C.line}` }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, color: C.text }}>
+              <thead><tr>{["DATE", "ORDER", "CUSTOMER", "ITEMS", "TOTAL", "SHIP TO", "PAYMENT"].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
+              <tbody>
+                {orders.map((o) => (
+                  <tr key={o.id}>
+                    <td style={tdm}>{(o.at || "").slice(0, 10)}</td>
+                    <td style={tdm}>{o.id}</td>
+                    <td style={td}>{o.customer?.name}<div style={{ ...mono, fontSize: 11, color: C.muted }}>{o.customer?.email}</div></td>
+                    <td style={td}>{(o.items || []).map((i) => `${i.qty}× ${i.name}`).join(", ")}</td>
+                    <td style={tdm}>${(Number(o.total) || 0).toFixed(2)}</td>
+                    <td style={td}>{o.shipping?.address ? `${o.shipping.address.city || ""}, ${o.shipping.address.state || ""}` : "—"}</td>
+                    <td style={{ ...tdm, fontSize: 11 }}>{o.paymentRef}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   INSTRUCTOR DEALS
+   ============================================================ */
+function DealCard({ d }) {
+  const [idx, setIdx] = useState(0);
+  const imgs = d.images || [];
+  return (
+    <div style={{ background: C.panel, border: `1px solid ${C.line}`, display: "flex", flexDirection: "column" }}>
+      <div style={{ background: C.panel2, height: 190, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+        {imgs[idx] ? <img src={imgs[idx]} alt={d.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> :
+          <span style={{ ...mono, color: C.muted, fontSize: 12 }}>NO PHOTO</span>}
+      </div>
+      {imgs.length > 1 && (
+        <div style={{ display: "flex", gap: 6, padding: "8px 12px 0" }}>
+          {imgs.map((im, i) => (
+            <img key={i} src={im} alt="" onClick={() => setIdx(i)} style={{ width: 40, height: 40, objectFit: "cover", cursor: "pointer", border: `2px solid ${i === idx ? C.bronze : C.line}` }} />
+          ))}
+        </div>
+      )}
+      <div style={{ padding: "14px 16px 18px", display: "flex", flexDirection: "column", gap: 8, flex: 1 }}>
+        <div style={{ ...mono, fontSize: 11, letterSpacing: "0.16em", color: C.bronze, textTransform: "uppercase" }}>{d.manufacturer}</div>
+        <div style={{ ...display, fontWeight: 700, fontSize: 19, textTransform: "uppercase", letterSpacing: "0.02em", color: C.bronzeLight, lineHeight: 1.2 }}>{d.name}</div>
+        {d.description && <p style={{ color: C.muted, fontSize: 13.5, lineHeight: 1.6, margin: 0, flex: 1 }}>{d.description}</p>}
+        {d.code && (
+          <div style={{ background: C.panel2, border: `1px dashed ${C.bronzeDark}`, padding: "9px 12px", ...mono, fontSize: 14, color: "#E3CD96", letterSpacing: "0.08em", textAlign: "center" }}>
+            CODE: <strong>{d.code}</strong>
+          </div>
+        )}
+        {d.link && (
+          <a href={/^https?:\/\//.test(d.link) ? d.link : `https://${d.link}`} target="_blank" rel="noopener noreferrer"
+            style={{ ...display, fontWeight: 700, fontSize: 14, letterSpacing: "0.05em", textTransform: "uppercase", alignSelf: "flex-start", background: C.bronze, color: "#1A1509", textDecoration: "none", padding: "10px 18px", borderRadius: 2, marginTop: 2 }}>
+            Visit {d.manufacturer || "manufacturer"} →
+          </a>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function InstructorDeals() {
+  const [deals, setDeals] = useState(null);
+  useEffect(() => { loadKey("gs:deals", []).then(setDeals); }, []);
+  return (
+    <div>
+      <div style={{ ...display, fontWeight: 700, fontSize: 24, textTransform: "uppercase", color: C.bronzeLight, marginBottom: 10 }}>Instructor Deals</div>
+      <p style={{ color: C.text, fontSize: 15.5, lineHeight: 1.75, maxWidth: 860, margin: "0 0 8px" }}>
+        As a certified Guardian Shield instructor, you qualify for numerous product discounts from manufacturers who support this program.
+        These partners value what you do — putting trained defenders between danger and the people who count on them — and back it up with
+        instructor-only pricing on gear you'll actually use on the range and in the classroom. Each deal below lists the manufacturer and
+        either a direct link to their instructor page or a discount code to use at their checkout.
+      </p>
+      <p style={{ color: C.muted, fontSize: 13, lineHeight: 1.6, maxWidth: 860, margin: "0 0 26px" }}>
+        These discounts are a benefit of your active instructor certification — please don't share codes outside the instructor community.
+      </p>
+      {deals === null ? (
+        <p style={{ ...mono, fontSize: 13, color: C.muted }}>Loading deals…</p>
+      ) : deals.length === 0 ? (
+        <p style={{ color: C.muted, fontSize: 15 }}>Deals are being arranged — check back soon.</p>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 20 }}>
+          {deals.map((d) => <DealCard key={d.id} d={d} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AdminDeals({ deals, saveDeals }) {
+  const empty = { name: "", manufacturer: "", link: "", code: "", description: "", images: [] };
+  const [f, setF] = useState(empty);
+  const [editingId, setEditingId] = useState(null);
+  const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(null);
+
+  const addImages = async (e) => {
+    const files = [...(e.target.files || [])];
+    e.target.value = "";
+    if (!files.length) return;
+    const room = 5 - f.images.length;
+    if (room <= 0) return setErr("A deal can have up to five pictures.");
+    setErr(null); setBusy(true);
+    const next = [...f.images];
+    for (const file of files.slice(0, room)) {
+      if (!file.type.startsWith("image/")) continue;
+      try { next.push(await compressImageFile(file)); } catch (ex) { /* skip */ }
+    }
+    setF({ ...f, images: next });
+    if (files.length > room) setErr(`Only ${room} more picture${room === 1 ? "" : "s"} could be added — five per deal.`);
+    setBusy(false);
+  };
+
+  const save = async () => {
+    if (!f.name.trim()) return setErr("Give the product a name.");
+    if (!f.manufacturer.trim()) return setErr("Enter the manufacturer's name.");
+    if (!f.link.trim() && !f.code.trim()) return setErr("Add a link to the manufacturer's page or a discount code (or both).");
+    setErr(null);
+    const rec = { name: f.name.trim(), manufacturer: f.manufacturer.trim(), link: f.link.trim(), code: f.code.trim().toUpperCase(), description: f.description.trim(), images: f.images.slice(0, 5) };
+    if (editingId) await saveDeals(deals.map((d) => (d.id === editingId ? { ...d, ...rec } : d)));
+    else await saveDeals([{ id: "DEAL-" + uid(), ...rec, created: new Date().toISOString() }, ...deals]);
+    setF(empty); setEditingId(null);
+  };
+
+  const startEdit = (d) => { setEditingId(d.id); setF({ name: d.name, manufacturer: d.manufacturer || "", link: d.link || "", code: d.code || "", description: d.description || "", images: [...(d.images || [])] }); setErr(null); };
+  const del = (d) => { saveDeals(deals.filter((x) => x.id !== d.id)); setConfirmDel(null); };
+
+  const smallBtn = { ...mono, fontSize: 12, background: "none", border: `1px solid ${C.bronzeDark}`, color: C.bronze, padding: "5px 12px", cursor: "pointer", borderRadius: 2 };
+  const inputS = { width: "100%", boxSizing: "border-box", padding: "10px 12px", border: `1px solid ${C.line}`, fontSize: 14, ...body, background: C.panel2, color: C.text };
+
+  return (
+    <div style={{ display: "grid", gap: 26 }}>
+      <div style={{ background: C.panel, border: `1px solid ${editingId ? C.bronze : C.line}`, padding: "18px 20px", display: "grid", gap: 12, maxWidth: 760 }}>
+        <div style={{ ...display, fontWeight: 700, fontSize: 18, textTransform: "uppercase", color: C.bronzeLight }}>{editingId ? "Edit deal" : "Add an instructor deal"}</div>
+        <div className="gs-row-2">
+          <div><FieldLabel>Product name</FieldLabel><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} style={inputS} /></div>
+          <div><FieldLabel>Manufacturer</FieldLabel><input value={f.manufacturer} onChange={(e) => setF({ ...f, manufacturer: e.target.value })} style={inputS} /></div>
+        </div>
+        <div className="gs-row-2">
+          <div><FieldLabel>Link to their page (optional)</FieldLabel><input value={f.link} onChange={(e) => setF({ ...f, link: e.target.value })} placeholder="https://manufacturer.com/instructors" style={inputS} /></div>
+          <div><FieldLabel>Discount code (optional)</FieldLabel><input value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} placeholder="GUARDIAN20" style={{ ...inputS, ...mono, textTransform: "uppercase" }} /></div>
+        </div>
+        <div>
+          <FieldLabel>Description (optional)</FieldLabel>
+          <textarea value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} rows={3} style={{ ...inputS, resize: "vertical", fontFamily: "inherit" }} />
+        </div>
+        <div>
+          <FieldLabel>Pictures ({f.images.length} of 5)</FieldLabel>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            {f.images.map((im, i) => (
+              <span key={i} style={{ position: "relative", display: "inline-block" }}>
+                <img src={im} alt="" style={{ width: 84, height: 84, objectFit: "cover", border: `1px solid ${C.line}` }} />
+                <button onClick={() => setF({ ...f, images: f.images.filter((_, j) => j !== i) })} title="Remove picture"
+                  style={{ position: "absolute", top: -8, right: -8, background: C.warn, color: "#1A1509", border: "none", borderRadius: "50%", width: 20, height: 20, cursor: "pointer", fontSize: 11, lineHeight: 1 }}>✕</button>
+              </span>
+            ))}
+            {f.images.length < 5 && (
+              <label style={{ ...smallBtn, display: "inline-block" }}>
+                {busy ? "Processing…" : "+ Add pictures"}
+                <input type="file" accept="image/*" multiple onChange={addImages} style={{ display: "none" }} />
+              </label>
+            )}
+          </div>
+        </div>
+        {err && <div style={{ ...mono, fontSize: 12, color: C.warn }}>{err}</div>}
+        <div style={{ display: "flex", gap: 10 }}>
+          <Btn small onClick={save} disabled={busy}>{editingId ? "Save changes" : "Add deal"}</Btn>
+          {editingId && <Btn small ghost onClick={() => { setEditingId(null); setF(empty); setErr(null); }}>Cancel</Btn>}
+        </div>
+      </div>
+
+      <div>
+        <div style={{ ...display, fontWeight: 700, fontSize: 18, textTransform: "uppercase", color: C.bronzeLight, marginBottom: 12 }}>Deals ({deals.length})</div>
+        {deals.length === 0 ? <p style={{ color: C.muted, fontSize: 14 }}>No deals yet — add the first above. Instructors see these on their Instructor Deals page.</p> : (
+          <div style={{ display: "grid", gap: 10 }}>
+            {deals.map((d) => (
+              <div key={d.id} style={{ display: "flex", gap: 14, alignItems: "center", background: C.panel, border: `1px solid ${C.line}`, padding: "12px 14px" }}>
+                {(d.images || [])[0] ? <img src={d.images[0]} alt="" style={{ width: 62, height: 62, objectFit: "cover" }} /> :
+                  <div style={{ width: 62, height: 62, background: C.panel2, display: "flex", alignItems: "center", justifyContent: "center", ...mono, fontSize: 9, color: C.muted }}>NO PHOTO</div>}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ ...display, fontWeight: 700, fontSize: 16, textTransform: "uppercase", color: C.text }}>{d.name}</div>
+                  <div style={{ ...mono, fontSize: 12, color: C.bronzeLight }}>{d.manufacturer}{d.code ? ` · CODE: ${d.code}` : ""}{d.link ? " · linked" : ""} · {(d.images || []).length} picture{(d.images || []).length === 1 ? "" : "s"}</div>
+                  {d.description && <div style={{ color: C.muted, fontSize: 12.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{d.description}</div>}
+                </div>
+                <button style={smallBtn} onClick={() => startEdit(d)}>Edit</button>
+                {confirmDel === d.id ? (
+                  <>
+                    <button style={{ ...smallBtn, borderColor: C.warn, color: C.warn }} onClick={() => del(d)}>Confirm delete</button>
+                    <button style={smallBtn} onClick={() => setConfirmDel(null)}>Keep</button>
+                  </>
+                ) : (
+                  <button style={{ ...smallBtn, borderColor: C.warn, color: C.warn }} onClick={() => setConfirmDel(d.id)}>Delete</button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
    ONGUARD PROGRAM
    ============================================================ */
 function OnGuard() {
@@ -2331,6 +2895,7 @@ function Portal({ user, setUser, reloadData, accounts, updateAccounts, classes, 
     ["create", "Create a class"],
     ["notify", `Notifications${unread ? ` (${unread})` : ""}`],
     ["grads", "Graduate directory"],
+    ["deals", "Instructor Deals"],
     ["agreement", "My Agreement"],
   ];
 
@@ -2358,6 +2923,7 @@ function Portal({ user, setUser, reloadData, accounts, updateAccounts, classes, 
         {tab === "create" && <PortalCreate classes={classes} updateClasses={updateClasses} onCreated={() => setTab("classes")} instructorName={instrName} instructorCompany={user.company || ""} creatorEmail={user.email || ""} instructorOptions={accounts.filter((a) => a.role === "instructor").map((a) => a.name)} />}
         {tab === "notify" && <PortalNotices notices={notices} updateNotices={updateNotices} ownClassIds={ownClassIds} />}
         {tab === "grads" && <PortalGrads certs={certs} updateCerts={updateCerts} ownClassIds={ownClassIds} />}
+        {tab === "deals" && <InstructorDeals />}
         {tab === "agreement" && <PortalAgreement user={user} />}
       </div>
     </div>
@@ -3228,7 +3794,7 @@ function PortalRequests({ requests, updateRequests }) {
 }
 
 function PortalCodes({ codes, updateCodes, instructorName }) {
-  const [f, setF] = useState({ code: "", kind: "percent", value: 10, expires: "", maxUses: "" });
+  const [f, setF] = useState({ code: "", kind: "percent", value: 10, expires: "", maxUses: "", scope: "classes" });
   const [err, setErr] = useState(null);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
 
@@ -3240,13 +3806,13 @@ function PortalCodes({ codes, updateCodes, instructorName }) {
     if (!value || value <= 0) return setErr("Enter a discount amount greater than zero.");
     if (f.kind === "percent" && value > 100) return setErr("Percentage discounts can't exceed 100%.");
     const newCode = {
-      id: uid(), code, kind: f.kind, value,
+      id: uid(), code, kind: f.kind, value, scope: f.scope || "classes",
       expires: f.expires || "", maxUses: f.maxUses ? Number(f.maxUses) : "",
       active: true, uses: 0, created: new Date().toISOString().slice(0, 10),
       createdBy: (instructorName || "").trim(),
     };
     await updateCodes([newCode, ...codes]);
-    setF({ code: "", kind: "percent", value: 10, expires: "", maxUses: "" });
+    setF({ code: "", kind: "percent", value: 10, expires: "", maxUses: "", scope: "classes" });
     setErr(null);
   };
 
@@ -3261,7 +3827,7 @@ function PortalCodes({ codes, updateCodes, instructorName }) {
 
   const startEdit = (c) => {
     setEditingId(c.id);
-    setEf({ code: c.code, kind: c.kind, value: c.value, expires: c.expires || "", maxUses: c.maxUses || "" });
+    setEf({ code: c.code, kind: c.kind, value: c.value, expires: c.expires || "", maxUses: c.maxUses || "", scope: c.scope || "classes" });
     setEditErr(null);
   };
 
@@ -3276,7 +3842,7 @@ function PortalCodes({ codes, updateCodes, instructorName }) {
     if (ef.kind === "percent" && value > 100) return setEditErr("Percentage discounts can't exceed 100%.");
     await updateCodes(codes.map((c) =>
       c.id === editingId
-        ? { ...c, code, kind: ef.kind, value, expires: ef.expires || "", maxUses: ef.maxUses ? Number(ef.maxUses) : "",
+        ? { ...c, code, kind: ef.kind, value, scope: ef.scope || "classes", expires: ef.expires || "", maxUses: ef.maxUses ? Number(ef.maxUses) : "",
             editedBy: (instructorName || "").trim(), edited: new Date().toISOString().slice(0, 10) }
         : c
     ));
@@ -3305,13 +3871,21 @@ function PortalCodes({ codes, updateCodes, instructorName }) {
           </div>
           <Field label={f.kind === "percent" ? "Percent off" : "Dollars off"} type="number" value={f.value} onChange={set("value")} />
         </div>
+        <div>
+          <FieldLabel>Valid for</FieldLabel>
+          <select value={f.scope} onChange={set("scope")} style={inputStyle}>
+            <option value="classes">Classes only</option>
+            <option value="store">Store only</option>
+            <option value="both">Classes & Store</option>
+          </select>
+        </div>
         <div className="gs-row-2">
           <Field label="Expiration date (optional)" type="date" value={f.expires} onChange={set("expires")} />
           <Field label="Max uses (optional)" type="number" value={f.maxUses} onChange={set("maxUses")} placeholder="Unlimited" />
         </div>
         {err && <div style={{ ...mono, fontSize: 12, color: C.warn }}>{err}</div>}
         <Btn onClick={create}>Create code</Btn>
-        <div style={{ ...mono, fontSize: 12, color: C.muted }}>Codes apply at checkout for any class registration — standard or instructor course.</div>
+        <div style={{ ...mono, fontSize: 12, color: C.muted }}>Codes apply at checkout — for class registrations, the Store, or both, depending on the scope you choose.</div>
       </div>
 
       {/* code list */}
@@ -3335,7 +3909,7 @@ function PortalCodes({ codes, updateCodes, instructorName }) {
                     <span style={{ ...mono, fontSize: 12, color: statusColor, marginLeft: "auto" }}>{status}</span>
                   </div>
                   <div style={{ ...mono, fontSize: 12, color: C.muted, marginTop: 6 }}>
-                    used {c.uses || 0}{c.maxUses ? ` of ${c.maxUses}` : ""} · {c.expires ? `expires ${fmtDate(c.expires)}` : "no expiration"} · created {fmtDate(c.created)}{c.createdBy ? ` by ${c.createdBy}` : ""}{c.edited ? ` · edited ${fmtDate(c.edited)}${c.editedBy ? ` by ${c.editedBy}` : ""}` : ""}
+                    {(c.scope || "classes") === "store" ? "Store only" : (c.scope || "classes") === "both" ? "Classes & Store" : "Classes only"} · used {c.uses || 0}{c.maxUses ? ` of ${c.maxUses}` : ""} · {c.expires ? `expires ${fmtDate(c.expires)}` : "no expiration"} · created {fmtDate(c.created)}{c.createdBy ? ` by ${c.createdBy}` : ""}{c.edited ? ` · edited ${fmtDate(c.edited)}${c.editedBy ? ` by ${c.editedBy}` : ""}` : ""}
                   </div>
                   {editingId === c.id ? (
                     <div style={{ marginTop: 12, background: C.panel2, border: `1px solid ${C.line}`, padding: "14px 14px 16px", display: "grid", gap: 10 }}>
@@ -3356,6 +3930,14 @@ function PortalCodes({ codes, updateCodes, instructorName }) {
                           <FieldLabel>{ef.kind === "percent" ? "Percent off" : "Dollars off"}</FieldLabel>
                           <input type="number" value={ef.value} onChange={eset("value")} style={{ ...inputStyle, background: C.panel }} />
                         </div>
+                      </div>
+                      <div>
+                        <FieldLabel>Valid for</FieldLabel>
+                        <select value={ef.scope} onChange={eset("scope")} style={{ ...inputStyle, background: C.panel }}>
+                          <option value="classes">Classes only</option>
+                          <option value="store">Store only</option>
+                          <option value="both">Classes & Store</option>
+                        </select>
                       </div>
                       <div className="gs-row-2">
                         <div>
@@ -3917,7 +4499,7 @@ function RosterPrintModal({ cls, onClose }) {
    ============================================================ */
 function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = [], media, updateMedia, go, inviteToken = null }) {
   const [tab, setTab] = useState("photos");
-  const [d, setD] = useState({ classes: [], certs: [], accounts: [], payments: [], settings: { commissionRate: 20 }, apps: [], requests: [], codes: [] });
+  const [d, setD] = useState({ classes: [], certs: [], accounts: [], payments: [], settings: { commissionRate: 20 }, apps: [], requests: [], codes: [], products: [], orders: [], deals: [] });
 
   const loadAll = async () => {
     const classes = await loadKey("gs:classes", []);
@@ -3927,6 +4509,9 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
     const apps = await loadKey("gs:apps", []);
     const requests = await loadKey("gs:requests", []);
     const codes = await loadKey("gs:codes", []);
+    const productsList = await loadKey("gs:products", []);
+    const ordersList = await loadKey("gs:orders", []);
+    const dealsList = await loadKey("gs:deals", []);
     let accs = [];
     try { const r = await apiGet("auth/accounts"); accs = r.accounts; }
     catch (e) {
@@ -3935,11 +4520,13 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
         ...(accounts || []).map((a) => ({ role: "admin", name: a.name, company: a.company || "", email: a.email, phone: a.phone || "", twofa: a.twofa, created: a.created })),
       ];
     }
-    setD({ classes, certs, payments, settings, accounts: accs, apps, requests, codes });
+    setD({ classes, certs, payments, settings, accounts: accs, apps, requests, codes, products: productsList, orders: ordersList, deals: dealsList });
   };
   useEffect(() => { if (user) loadAll(); }, [user]);
 
   const saveCerts = async (next) => { setD((p) => ({ ...p, certs: next })); await saveKey("gs:certs", next); };
+  const saveProducts = async (next) => { setD((p) => ({ ...p, products: next })); await saveKey("gs:products", next); };
+  const saveDeals = async (next) => { setD((p) => ({ ...p, deals: next })); await saveKey("gs:deals", next); };
   const saveClasses = async (next) => { setD((p) => ({ ...p, classes: next })); await saveKey("gs:classes", next); };
   const savePayments = async (next) => { setD((p) => ({ ...p, payments: next })); await saveKey("gs:payments", next); };
   const saveSettings = async (next) => { setD((p) => ({ ...p, settings: next })); await saveKey("gs:settings", next); };
@@ -3962,6 +4549,8 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
     ["classes", `Classes (${d.classes.length})`],
     ["requests", `Class requests${(d.requests || []).filter((r) => !r.read).length ? ` (${(d.requests || []).filter((r) => !r.read).length} new)` : ""}`],
     ["codes", "Discount codes"],
+    ["store", `Store (${(d.products || []).length})`],
+    ["deals", `Instructor Deals (${(d.deals || []).length})`],
     ["users", `Users (${d.certs.length})`],
     ["admins", `Admins (${d.accounts.filter((a) => a.role === "admin").length})`],
     ["report", "Class report"],
@@ -3996,6 +4585,8 @@ function AdminPortal({ user, setUser, accounts, updateAccounts, instrAccounts = 
         {tab === "classes" && <PortalClasses classes={d.classes} updateClasses={saveClasses} certs={d.certs} updateCerts={saveCerts} isAdmin instructorOptions={(d.accounts || []).filter((a) => a.role === "instructor").map((a) => a.name)} />}
         {tab === "requests" && <PortalRequests requests={d.requests || []} updateRequests={saveRequests} />}
         {tab === "codes" && <PortalCodes codes={d.codes || []} updateCodes={saveCodes} instructorName={user.name} />}
+        {tab === "store" && <AdminStore products={d.products || []} saveProducts={saveProducts} orders={d.orders || []} />}
+        {tab === "deals" && <AdminDeals deals={d.deals || []} saveDeals={saveDeals} />}
         {tab === "users" && <AdminUsers certs={d.certs} saveCerts={saveCerts} accounts={d.accounts} refresh={loadAll} />}
         {tab === "admins" && <AdminAdmins accounts={d.accounts} refresh={loadAll} currentEmail={user.email} />}
         {tab === "report" && <AdminClassReport classes={d.classes} accounts={d.accounts} />}
@@ -4919,7 +5510,6 @@ function AdminCommissions({ classes, accounts, certs = [], payments, savePayment
   const [jm4Err, setJm4Err] = useState(null);
   const [jm4Msg, setJm4Msg] = useState(null);
 
-  const round2 = (n) => Math.round(n * 100) / 100;
   const companyOf = (name) => {
     const a = accounts.find((x) => (x.name || "").toLowerCase() === (name || "").toLowerCase());
     return a ? a.company || "" : "";
