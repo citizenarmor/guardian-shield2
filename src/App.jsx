@@ -127,6 +127,8 @@ const ONGUARD_TOOLS = [
     desc: "The PRIME Compass planning tool. Walk your organization through a complete facility security strategic plan — assessing risk, defining roles, and producing a written plan your leadership and team can stand behind." },
   { n: 3, title: "OnGuard Training & Curriculum Generator", href: "/onguard/training-curriculum-generator.html",
     desc: "Build a structured, repeatable training curriculum for your safety team — turning your strategic plan into scheduled, documented training your people actually complete." },
+  { n: 4, title: "AI Generation Key — Setup Guide", href: "/onguard/ai-generation-key.html",
+    desc: "The OnGuard tools generate their documents with AI, powered by your own AI Generation Key (an Anthropic API key). This five-minute guide walks you through creating the key, adding credits, keeping it safe, and using it in any OnGuard tool." },
 ];
 const isSuperUser = (u) => !!u && (u.email || "").toLowerCase() === SUPERUSER_EMAIL;
 

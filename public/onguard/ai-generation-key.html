@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Generation Key — Setup Guide | On Guard Network</title>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;800;900&family=Barlow:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --black: #080808; --charcoal: #111111; --card: #161616; --border: #222222;
+  --gold: #B8860B; --gold-bright: #D4A017; --gold-dim: rgba(184,134,11,0.25); --gold-bg: rgba(184,134,11,0.08);
+  --text: #E8E4DA; --muted: #9A948A; --green: #6FBF8F; --red: #C0392B;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--black); color: var(--text); font-family: 'Barlow', sans-serif; line-height: 1.65; }
+.header { background: var(--charcoal); border-bottom: 1px solid var(--gold-dim); padding: 18px 28px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.header h1 { font-family: 'Barlow Condensed', sans-serif; font-weight: 800; font-size: 26px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--gold-bright); }
+.header p { color: var(--muted); font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; }
+.header .back { margin-left: auto; }
+a.btn { display: inline-block; font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 15px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--gold-bright); border: 1px solid var(--gold); padding: 9px 18px; border-radius: 3px; text-decoration: none; transition: all .2s; }
+a.btn:hover { background: var(--gold); color: var(--black); }
+a.btn.solid { background: var(--gold-bright); color: var(--black); border-color: var(--gold-bright); }
+a.btn.solid:hover { background: var(--gold); }
+.container { max-width: 880px; margin: 0 auto; padding: 44px 24px 90px; }
+.hero { text-align: center; margin-bottom: 40px; }
+.hero .kicker { font-family: 'Barlow Condensed', sans-serif; font-size: 14px; letter-spacing: 0.3em; text-transform: uppercase; color: var(--gold); margin-bottom: 10px; }
+.hero h2 { font-family: 'Barlow Condensed', sans-serif; font-weight: 900; font-size: clamp(34px, 6vw, 52px); letter-spacing: 0.04em; text-transform: uppercase; line-height: 1.05; }
+.hero h2 span { color: var(--gold-bright); }
+.hero .sub { color: var(--muted); max-width: 640px; margin: 14px auto 0; font-size: 16px; }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 5px; padding: 26px 28px; margin-bottom: 22px; }
+.card.gold { border-color: var(--gold-dim); background: var(--gold-bg); }
+.card h3 { font-family: 'Barlow Condensed', sans-serif; font-weight: 800; font-size: 21px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--gold-bright); margin-bottom: 10px; display: flex; align-items: center; gap: 12px; }
+.step-no { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 50%; background: var(--gold-bright); color: var(--black); font-family: 'Barlow Condensed', sans-serif; font-weight: 800; font-size: 18px; flex: none; }
+.card p, .card li { color: var(--text); font-size: 15.5px; }
+.card p + p { margin-top: 10px; }
+.card ul, .card ol { margin: 10px 0 0 22px; }
+.card li { margin-bottom: 8px; }
+.muted { color: var(--muted); }
+.mono { font-family: 'Courier New', monospace; color: var(--gold-bright); background: rgba(0,0,0,0.45); border: 1px solid var(--border); padding: 2px 7px; border-radius: 3px; font-size: 14px; white-space: nowrap; }
+strong { color: var(--gold-bright); font-weight: 600; }
+a.inline { color: var(--gold-bright); }
+.warn { border-left: 3px solid var(--red); background: rgba(192,57,43,0.08); padding: 14px 18px; border-radius: 3px; margin-top: 14px; font-size: 14.5px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+@media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
+table { width: 100%; border-collapse: collapse; font-size: 14.5px; margin-top: 8px; }
+th { font-family: 'Barlow Condensed', sans-serif; letter-spacing: 0.08em; text-transform: uppercase; color: var(--gold); text-align: left; font-size: 13px; padding: 8px 10px; border-bottom: 1px solid var(--gold-dim); }
+td { padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.footer { text-align: center; color: var(--muted); font-size: 13px; margin-top: 44px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>AI Generation Key</h1>
+    <p>On Guard Network — Setup Guide</p>
+  </div>
+  <div class="back"><a class="btn" href="/?view=onguard">&larr; Back to OnGuard</a></div>
+</div>
+
+<div class="container">
+  <div class="hero">
+    <div class="kicker">Powering Your OnGuard Tools</div>
+    <h2>Get Your <span>AI Generation Key</span></h2>
+    <p class="sub">Five minutes, one time. Your key unlocks AI-generated threat narratives, deployment plans, and training curricula across the OnGuard tools.</p>
+  </div>
+
+  <div class="card gold">
+    <h3>What is the AI Generation Key?</h3>
+    <p>Your AI Generation Key is an <strong>API key from Anthropic</strong> — the company behind the Claude AI that writes your security plan outputs. The OnGuard tools run entirely in your browser: when you generate a plan, your browser sends the request <strong>directly to Anthropic using your own key</strong>. Nothing passes through anyone else's servers, your facility information stays between you and Anthropic, and you pay Anthropic directly for only what you use — typical document generations cost cents.</p>
+    <p class="muted">One key works across all OnGuard tools. You create it once and can reuse it any time.</p>
+  </div>
+
+  <div class="card">
+    <h3><span class="step-no">1</span> Create your Anthropic account</h3>
+    <p>Go to <a class="inline" href="https://console.anthropic.com" target="_blank" rel="noopener noreferrer">console.anthropic.com</a> and click <strong>Sign up</strong>. You can register with your email address or continue with a Google account, then verify your email.</p>
+    <p class="muted">This is Anthropic's developer console. It's a separate account from the claude.ai chat app — even if you use Claude for chat, the API key comes from the console.</p>
+  </div>
+
+  <div class="card">
+    <h3><span class="step-no">2</span> Add credits</h3>
+    <p>The key itself is free — usage is pay-as-you-go from a prepaid credit balance. In the console, open <strong>Billing</strong> (under Settings), add a payment method, and purchase a small amount of credits. <strong>$5 is plenty to start</strong> and typically covers many document generations.</p>
+    <p class="muted">New accounts sometimes include a small one-time trial credit — check your balance after signing up. You can set spending limits and auto-top-up rules in Billing so there are never surprises.</p>
+  </div>
+
+  <div class="card">
+    <h3><span class="step-no">3</span> Create the key</h3>
+    <ol>
+      <li>In the console's navigation, open <strong>API Keys</strong>.</li>
+      <li>Click <strong>Create Key</strong> and give it a name you'll recognize — e.g. <span class="mono">OnGuard</span>.</li>
+      <li>Your key appears <strong>one time only</strong>. It's a long string starting with <span class="mono">sk-ant-</span>. Copy the whole thing immediately.</li>
+    </ol>
+    <div class="warn"><strong>Shown once, ever.</strong> If you close the window without copying, no harm done — just delete that key and create a new one. If you lose a key later, do the same: revoke it and create a fresh one.</div>
+  </div>
+
+  <div class="card">
+    <h3><span class="step-no">4</span> Use it in the OnGuard tools</h3>
+    <p>Open any OnGuard tool and paste the full key into the <strong>AI Generation Key</strong> field (the one showing <span class="mono">sk-ant-...</span>). That's it — generation is unlocked. The key is used by your browser to talk to Anthropic and is never sent anywhere else.</p>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <h3>Keep it safe</h3>
+      <ul>
+        <li>Treat the key <strong>like a password</strong> — anyone holding it can spend your credits.</li>
+        <li>Don't email it, text it, or post it anywhere.</li>
+        <li>Compromised or lost? <strong>Revoke it</strong> in the console and create a new one — takes under a minute.</li>
+        <li>Set a <strong>spending limit</strong> in Billing as a safety net.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>If something goes wrong</h3>
+      <table>
+        <tr><th>You see</th><th>Fix</th></tr>
+        <tr><td>"Invalid API key" / 401</td><td>Re-copy the full key (no spaces). Still failing? Create a new key.</td></tr>
+        <tr><td>Billing or credit error / 400</td><td>Your credit balance is empty — add credits in Billing.</td></tr>
+        <tr><td>Rate limit / 429</td><td>Too many requests at once. Wait a minute and try again.</td></tr>
+        <tr><td>Generation never finishes</td><td>Check your connection, then retry — your inputs are still on the page.</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div style="text-align:center; margin-top: 34px;">
+    <a class="btn solid" href="https://console.anthropic.com" target="_blank" rel="noopener noreferrer">Open the Anthropic Console &rarr;</a>
+  </div>
+
+  <div class="footer">
+    On Guard Network · guardianshield.training<br>
+    Anthropic's own documentation lives at <a class="inline" href="https://docs.claude.com" target="_blank" rel="noopener noreferrer">docs.claude.com</a>
+  </div>
+</div>
+
+</body>
+</html>
