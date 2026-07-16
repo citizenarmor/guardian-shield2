@@ -535,14 +535,14 @@ export default function App() {
 
   const nav = [
     ["home", "Home"],
+    ["onguard", "OnGuard"],
     ["product", "The Product"],
     ["training", "The Training"],
     ["schedule", "Class Schedule"],
-    ["about", "About"],
     ["verify", "Verify a Certification"],
     ["instructor", "Become an Instructor"],
     ["portal", "Instructor Portal"],
-    ["onguard", "OnGuard"],
+    ["about", "About"],
   ];
 
   return (
@@ -571,7 +571,7 @@ export default function App() {
                     {label} ▾
                   </button>
                   {ogOpen && (
-                    <div style={{ position: "absolute", right: 0, top: "100%", minWidth: 320, background: C.header, border: `1px solid ${C.bronzeDark}`, boxShadow: "0 10px 30px rgba(0,0,0,0.5)", zIndex: 60 }}>
+                    <div style={{ position: "absolute", left: 0, top: "100%", minWidth: 320, background: C.header, border: `1px solid ${C.bronzeDark}`, boxShadow: "0 10px 30px rgba(0,0,0,0.5)", zIndex: 60 }}>
                       {ONGUARD_TOOLS.map((t) => (
                         <a key={t.href} href={t.href} target="_blank" rel="noopener noreferrer" onClick={() => setOgOpen(false)}
                           style={{ ...display, fontWeight: 600, fontSize: 14, letterSpacing: "0.04em", textTransform: "uppercase", display: "block",
