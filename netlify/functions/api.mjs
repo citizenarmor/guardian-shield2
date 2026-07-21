@@ -367,6 +367,7 @@ async function handleAuth(req, path, body) {
       account: {
         id: uid(), role, name: name.trim(), company: (company || "").trim(),
         email: email.trim(), phone: (phone || "").trim(),
+        certId: role === "instructor" ? String(enrollKey || "").trim().toUpperCase() : "",
         salt, hash: hashPassword(password, salt),
         totpSecret: makeTotpSecret(), twofa: "totp",
         created: new Date().toISOString().slice(0, 10),
@@ -395,6 +396,15 @@ async function handleAuth(req, path, body) {
       if (inv) { inv.usedAt = new Date().toISOString(); inv.usedBy = account.email; await writeJson(`gs:admininvite:${pending.inviteToken}`, inv); }
     }
     await store().delete(`auth:pending:${pendingToken}`);
+    /* alert the program director when a new instructor joins the portal */
+    if (account.role === "instructor" && ADMIN_NOTIFY && account.email.toLowerCase() !== ADMIN_NOTIFY.toLowerCase()) {
+      try {
+        await sendEmail(ADMIN_NOTIFY, "New instructor account created", `
+          <p><strong>${esc(account.name)}</strong>${account.company ? " (" + esc(account.company) + ")" : ""} just created their Instructor Portal account.</p>
+          <p style="background:#242017;border:1px solid #3A3527;padding:12px 16px;">${esc(account.email)}${account.phone ? " · " + esc(account.phone) : ""}${account.certId ? "<br>Certification: " + esc(account.certId) : ""}</p>
+          <p>Their account is active — they can now create classes and access instructor resources.</p>`);
+      } catch (e) { console.error("account alert email error:", e); }
+    }
     const token = await createSession(account);
     return json({ session: token, account: publicAccount(account) });
   }
