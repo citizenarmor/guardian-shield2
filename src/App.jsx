@@ -122,14 +122,14 @@ const phoneOk = (p) => String(p || "").replace(/\D/g, "").length >= 10;
 const SUPERUSER_EMAIL = "aaron@citizenarmor.com";
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const ONGUARD_TOOLS = [
-  { n: 1, title: "OnGuard Stop Card", href: "/onguard/stop-card.html",
-    desc: "The S.T.O.P. Card Builder. Create pocket-sized emergency action cards that put your facility's critical first moves — Secure, Tell, Observe, Protect — in every team member's hands before an incident ever starts." },
-  { n: 2, title: "OnGuard Facility Strategic Plan", href: "/onguard/facility-strategic-plan.html",
-    desc: "The PRIME Compass planning tool. Walk your organization through a complete facility security strategic plan — assessing risk, defining roles, and producing a written plan your leadership and team can stand behind." },
-  { n: 3, title: "OnGuard Training & Curriculum Generator", href: "/onguard/training-curriculum-generator.html",
-    desc: "Build a structured, repeatable training curriculum for your safety team — turning your strategic plan into scheduled, documented training your people actually complete." },
-  { n: 4, title: "AI Generation Key — Setup Guide", href: "/onguard/ai-generation-key.html",
-    desc: "The OnGuard tools generate their documents with AI, powered by your own AI Generation Key (an Anthropic API key). This five-minute guide walks you through creating the key, adding credits, keeping it safe, and using it in any OnGuard tool." },
+  { n: 1, title: "OnGuard Stop Card", href: "/onguard/stop-card.html", tag: "Respond",
+    desc: "A builder for the pocket-sized S.T.O.P. Card — the card your people reach for when something goes wrong. You enter your facility's specifics: rally point, primary and secondary exit routes, best shelter areas, the children's pickup protocol, and how to reach your security team. The tool assembles them into the four-step S.T.O.P. sequence — Survive & Succeed mindset, Take Off if a safe exit exists, Obstruct when you must shelter, Protect — with a live preview and a completeness meter as you type. Print it, save it as a PDF, or copy the text; every staff member and volunteer carries the same plan in their pocket." },
+  { n: 2, title: "OnGuard Facility Strategic Plan", href: "/onguard/facility-strategic-plan.html", tag: "Assess & Plan",
+    desc: "A guided, nine-step assessment that walks your leadership through the whole facility: profile, threat environment, perimeter, entry points, interior layout, and your team — including uploads of your site plan and floor plan, and a role structure from the deployment leader through Shield operators to support staff. From that assessment it generates a complete written strategic plan grounded in the Watchman Doctrine and Star Defense framework: threat narratives for your specific facility, deployment maps covering approach routes, dead zones, fatal funnels and observation posts, and a training curriculum starter. Uses your AI Generation Key." },
+  { n: 3, title: "OnGuard Training & Curriculum Generator", href: "/onguard/training-curriculum-generator.html", tag: "Train",
+    desc: "Turns any real-world incident into a complete, deployable drill for your team — because every incident in the news is a training asset. Describe a scenario and it generates four pieces: the Threat Signature (how this incident type develops and the warning signs most commonly missed), a Training Scenario reframed for your facility and team size, a Drill Protocol with roles, objectives, timing and success criteria — calibrated tabletop or live movement — and a structured After-Action Review to capture lessons and update your plan. Generated fresh for each scenario, never templated. Uses your AI Generation Key." },
+  { n: 4, title: "AI Generation Key — Setup Guide", href: "/onguard/ai-generation-key.html", tag: "Setup",
+    desc: "The strategic plan and curriculum tools generate their documents with AI, powered by your own AI Generation Key — an Anthropic API key that your browser uses directly, so your facility information stays between you and the AI provider and you pay only for what you use. This five-minute guide walks through creating the account, adding a few dollars of credits, creating the key, and keeping it safe — plus a troubleshooting table for the errors people actually hit." },
 ];
 const isSuperUser = (u) => !!u && (u.email || "").toLowerCase() === SUPERUSER_EMAIL;
 
@@ -378,7 +378,6 @@ const classPlace = (c) => [c.location, [c.city, c.state].filter(Boolean).join(",
 export default function App() {
   const [view, setView] = useState("home");
   const [menuOpen, setMenuOpen] = useState(false);
-  const [ogOpen, setOgOpen] = useState(false);
   const [classes, setClasses] = useState([]);
   const [certs, setCerts] = useState([]);
   const [apps, setApps] = useState([]);
@@ -566,35 +565,12 @@ export default function App() {
           </button>
           <nav className="gs-nav-desktop">
             {nav.map(([id, label]) => (
-              id === "onguard" ? (
-                <span key={id} style={{ position: "relative", display: "inline-block" }}
-                  onMouseEnter={() => setOgOpen(true)} onMouseLeave={() => setOgOpen(false)}>
-                  <button onClick={() => { setView(id); setOgOpen(false); }}
-                    style={{ ...display, fontWeight: 600, fontSize: 15, letterSpacing: "0.05em", textTransform: "uppercase",
-                      background: view === id ? C.bronze : "transparent", color: view === id ? "#1A1509" : C.text, border: "none",
-                      padding: "8px 12px", cursor: "pointer", borderRadius: 2 }}>
-                    {label} ▾
-                  </button>
-                  {ogOpen && (
-                    <div style={{ position: "absolute", left: 0, top: "100%", minWidth: 320, background: C.header, border: `1px solid ${C.bronzeDark}`, boxShadow: "0 10px 30px rgba(0,0,0,0.5)", zIndex: 60 }}>
-                      {ONGUARD_TOOLS.map((t) => (
-                        <a key={t.href} href={t.href} target="_blank" rel="noopener noreferrer" onClick={() => setOgOpen(false)}
-                          style={{ ...display, fontWeight: 600, fontSize: 14, letterSpacing: "0.04em", textTransform: "uppercase", display: "block",
-                            color: C.text, textDecoration: "none", padding: "12px 16px", borderBottom: `1px solid ${C.line}` }}>
-                          <span style={{ ...mono, color: C.bronze, fontSize: 12, marginRight: 8 }}>{t.n}.</span>{t.title}
-                        </a>
-                      ))}
-                    </div>
-                  )}
-                </span>
-              ) : (
               <button key={id} onClick={() => setView(id)}
                 style={{ ...display, fontWeight: 600, fontSize: 15, letterSpacing: "0.05em", textTransform: "uppercase",
                   background: view === id ? C.bronze : "transparent", color: view === id ? "#1A1509" : C.text, border: "none",
                   padding: "8px 12px", cursor: "pointer", borderRadius: 2 }}>
                 {label}
               </button>
-              )
             ))}
           </nav>
           <button className="gs-nav-toggle" onClick={() => setMenuOpen(!menuOpen)} aria-label="Open menu" aria-expanded={menuOpen}
@@ -605,23 +581,13 @@ export default function App() {
         {menuOpen && (
           <div style={{ borderTop: `1px solid ${C.line}`, background: C.header }}>
             {nav.map(([id, label]) => (
-              <React.Fragment key={id}>
-                <button onClick={() => { setView(id); setMenuOpen(false); }}
-                  style={{ ...display, fontWeight: 600, fontSize: 17, letterSpacing: "0.05em", textTransform: "uppercase",
-                    display: "block", width: "100%", textAlign: "left",
-                    background: view === id ? C.bronze : "transparent", color: view === id ? "#1A1509" : C.text,
-                    border: "none", borderBottom: `1px solid ${C.line}`, padding: "14px 20px", cursor: "pointer" }}>
-                  {label}
-                </button>
-                {id === "onguard" && ONGUARD_TOOLS.map((t) => (
-                  <a key={t.href} href={t.href} target="_blank" rel="noopener noreferrer" onClick={() => setMenuOpen(false)}
-                    style={{ ...display, fontWeight: 600, fontSize: 15, letterSpacing: "0.04em", textTransform: "uppercase",
-                      display: "block", width: "100%", textAlign: "left", boxSizing: "border-box", color: C.muted, textDecoration: "none",
-                      borderBottom: `1px solid ${C.line}`, padding: "12px 20px 12px 40px" }}>
-                    <span style={{ ...mono, color: C.bronze, fontSize: 12, marginRight: 8 }}>{t.n}.</span>{t.title}
-                  </a>
-                ))}
-              </React.Fragment>
+              <button key={id} onClick={() => { setView(id); setMenuOpen(false); }}
+                style={{ ...display, fontWeight: 600, fontSize: 17, letterSpacing: "0.05em", textTransform: "uppercase",
+                  display: "block", width: "100%", textAlign: "left",
+                  background: view === id ? C.bronze : "transparent", color: view === id ? "#1A1509" : C.text,
+                  border: "none", borderBottom: `1px solid ${C.line}`, padding: "14px 20px", cursor: "pointer" }}>
+                {label}
+              </button>
             ))}
           </div>
         )}
@@ -2283,34 +2249,43 @@ function AdminDeals({ deals, saveDeals }) {
    ============================================================ */
 function OnGuard() {
   return (
-    <main style={{ maxWidth: 1140, margin: "0 auto", padding: "56px 20px 90px" }}>
+    <main style={{ maxWidth: 1040, margin: "0 auto", padding: "56px 20px 90px" }}>
       <div style={{ ...mono, fontSize: 12, letterSpacing: "0.24em", color: C.bronze, textTransform: "uppercase" }}>The OnGuard Program</div>
       <h1 style={{ ...display, fontWeight: 800, fontSize: "clamp(34px, 5vw, 52px)", textTransform: "uppercase", letterSpacing: "0.04em", color: C.bronzeLight, margin: "10px 0 22px" }}>
         Prepared before it matters
       </h1>
-      <p style={{ color: C.text, fontSize: 17, lineHeight: 1.75, maxWidth: 860, margin: "0 0 14px" }}>
+      <p style={{ color: C.text, fontSize: 17, lineHeight: 1.75, margin: "0 0 14px" }}>
         The OnGuard program is Guardian Shield Training's readiness framework for organizations — churches, schools, businesses, and
         community facilities that accept responsibility for the people inside their walls. Shield certification prepares the individual;
-        OnGuard prepares the organization around them. The program walks a facility through the three disciplines that decide the outcome
-        of a critical incident long before one begins: a written <strong style={{ color: C.bronzeLight }}>strategic security plan</strong> built
-        on an honest assessment of the facility, a <strong style={{ color: C.bronzeLight }}>training curriculum</strong> that turns that plan
-        into scheduled, documented practice, and a <strong style={{ color: C.bronzeLight }}>S.T.O.P. Card</strong> that puts each team
-        member's critical first actions in their pocket. Used together, the three tools below take a security team from good intentions
-        to a documented, drilled, and defensible state of readiness.
+        OnGuard prepares the organization around them.
       </p>
-      <p style={{ color: C.muted, fontSize: 14, lineHeight: 1.7, maxWidth: 860, margin: "0 0 40px" }}>
-        Each tool opens in its own workspace. Your work stays on your device — build, refine, and print or save your documents when ready.
+      <p style={{ color: C.text, fontSize: 16, lineHeight: 1.75, margin: "0 0 14px" }}>
+        The program moves a facility through the three disciplines that decide the outcome of a critical incident long before one begins.
+        First you <strong style={{ color: C.bronzeLight }}>assess and plan</strong>: a guided walk through your facility, threats, perimeter,
+        entry points, and team that produces a written strategic security plan. Then you <strong style={{ color: C.bronzeLight }}>train</strong>:
+        real-world scenarios become documented drills with clear roles, timing, and after-action review. And on the worst day, your people
+        <strong style={{ color: C.bronzeLight }}> respond</strong>: a S.T.O.P. Card in every pocket with the facility's exits, shelter areas,
+        and first actions already decided. Used together, the tools below take a security team from good intentions to a documented,
+        drilled, and defensible state of readiness.
       </p>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 20 }}>
+      <p style={{ color: C.muted, fontSize: 14, lineHeight: 1.7, margin: "0 0 44px" }}>
+        Each tool opens in its own workspace and your work stays on your device — build, refine, and print or save your documents when
+        ready. The planning and training tools generate their documents with AI using your own AI Generation Key; tool four shows you
+        how to get one in about five minutes.
+      </p>
+      <div style={{ display: "grid", gap: 18 }}>
         {ONGUARD_TOOLS.map((t) => (
-          <div key={t.href} style={{ background: C.panel, border: `1px solid ${C.line}`, padding: "26px 26px 24px", display: "flex", flexDirection: "column", gap: 14 }}>
-            <div style={{ ...mono, fontSize: 13, color: C.bronze }}>{String(t.n).padStart(2, "0")}</div>
-            <div style={{ ...display, fontWeight: 700, fontSize: 22, textTransform: "uppercase", letterSpacing: "0.03em", color: C.bronzeLight, lineHeight: 1.2 }}>{t.title}</div>
-            <p style={{ color: C.muted, fontSize: 14.5, lineHeight: 1.65, margin: 0, flex: 1 }}>{t.desc}</p>
+          <div key={t.href} style={{ background: C.panel, border: `1px solid ${C.line}`, padding: "26px 28px" }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 14, flexWrap: "wrap" }}>
+              <div style={{ ...display, fontWeight: 800, fontSize: 34, color: C.bronzeDark, lineHeight: 1 }}>{String(t.n).padStart(2, "0")}</div>
+              <div style={{ ...display, fontWeight: 700, fontSize: 23, textTransform: "uppercase", letterSpacing: "0.03em", color: C.bronzeLight, lineHeight: 1.2, flex: 1, minWidth: 220 }}>{t.title}</div>
+              <div style={{ ...mono, fontSize: 11, letterSpacing: "0.18em", color: C.bronze, textTransform: "uppercase", border: `1px solid ${C.bronzeDark}`, padding: "4px 10px" }}>{t.tag}</div>
+            </div>
+            <p style={{ color: C.text, fontSize: 14.5, lineHeight: 1.7, margin: "14px 0 18px" }}>{t.desc}</p>
             <a href={t.href} target="_blank" rel="noopener noreferrer"
-              style={{ ...display, fontWeight: 700, fontSize: 15, letterSpacing: "0.06em", textTransform: "uppercase", alignSelf: "flex-start",
+              style={{ ...display, fontWeight: 700, fontSize: 15, letterSpacing: "0.06em", textTransform: "uppercase", display: "inline-block",
                 background: C.bronze, color: "#1A1509", textDecoration: "none", padding: "12px 22px", borderRadius: 2 }}>
-              Open the tool →
+              Open {t.n === 4 ? "the guide" : "the tool"} →
             </a>
           </div>
         ))}
